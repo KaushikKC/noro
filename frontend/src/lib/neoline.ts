@@ -388,7 +388,7 @@ export function waitForNeoLine(): Promise<void> {
 
 // Contract addresses
 export const GAS_CONTRACT_HASH = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
-export const NORO_CONTRACT_HASH = "0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a";
+export const NORO_CONTRACT_HASH = "0x1974aac54640ec80413e2229003b617daf849a13";
 
 // Witness scope constants (from Neo N3)
 export const WITNESS_SCOPE = {

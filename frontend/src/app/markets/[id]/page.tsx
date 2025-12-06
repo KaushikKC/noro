@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AgentChat } from "@/components/features/AgentChat";
@@ -69,6 +69,39 @@ export default function MarketDetailsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+
+  // Callback to handle analysis updates from AgentChat
+  const handleAnalysisUpdate = useCallback(
+    (analysis: AgentAnalysis) => {
+      // Update parent state when AgentChat fetches analysis
+      setAgentAnalysis(analysis);
+
+      // Update probability when analysis is available
+      const consensusProb =
+        analysis.summary?.consensus_probability ??
+        analysis.judgment?.consensus_probability;
+
+      if (consensusProb !== undefined && marketData) {
+        const probPercent = consensusProb * 100;
+        setMarketData({
+          ...marketData,
+          probability: probPercent,
+          agentProbability: probPercent,
+        });
+        console.log(
+          `✅ [AUTO-UPDATE] Updated probability to ${probPercent.toFixed(
+            1
+          )}% from AgentChat analysis`
+        );
+      }
+
+      // Update trade proposal if available
+      if (analysis.trade_proposal) {
+        setTradeProposal(analysis.trade_proposal);
+      }
+    },
+    [marketData]
+  );
 
   useEffect(() => {
     const loadMarket = async () => {
@@ -445,6 +478,11 @@ export default function MarketDetailsPage() {
         analysis = await analyzeMarket(id);
       }
 
+      console.log(
+        "📊 [ANALYZE] Full analysis response:",
+        JSON.stringify(analysis, null, 2)
+      );
+
       setAgentAnalysis(analysis);
 
       // Update trade proposal if available
@@ -453,17 +491,38 @@ export default function MarketDetailsPage() {
       }
 
       // Update probability when analysis completes
-      if (analysis.summary?.consensus_probability && marketData) {
-        const consensusProb = analysis.summary.consensus_probability * 100;
-        
+      // Check both summary and judgment for consensus_probability
+      const consensusProb =
+        analysis.summary?.consensus_probability ??
+        analysis.judgment?.consensus_probability;
+
+      if (consensusProb !== undefined && marketData) {
+        const probPercent = consensusProb * 100;
+
         // Update both agentProbability and main probability field
         setMarketData({
           ...marketData,
-          probability: consensusProb, // Update main probability to show in gauge
-          agentProbability: consensusProb,
+          probability: probPercent, // Update main probability to show in gauge
+          agentProbability: probPercent,
         });
-        
-        console.log(`✅ Updated probability to ${consensusProb.toFixed(1)}% from agent analysis`);
+
+        console.log(
+          `✅ [ANALYZE] Updated probability to ${probPercent.toFixed(
+            1
+          )}% from agent analysis`
+        );
+        console.log(`✅ [ANALYZE] Analysis summary:`, analysis.summary);
+        console.log(`✅ [ANALYZE] Analysis judgment:`, analysis.judgment);
+      } else {
+        console.warn(
+          "⚠️ [ANALYZE] No consensus_probability found in analysis:",
+          {
+            hasSummary: !!analysis.summary,
+            hasJudgment: !!analysis.judgment,
+            summaryProb: analysis.summary?.consensus_probability,
+            judgmentProb: analysis.judgment?.consensus_probability,
+          }
+        );
       }
     } catch (err) {
       console.error("Error analyzing market:", err);
@@ -771,41 +830,96 @@ export default function MarketDetailsPage() {
             <div className="z-10">
               <ProbabilityGauge
                 probability={
-                  agentAnalysis?.summary?.consensus_probability
+                  agentAnalysis?.summary?.consensus_probability !== undefined
                     ? Math.round(
                         agentAnalysis.summary.consensus_probability * 100
                       )
-                    : marketData.probability
+                    : agentAnalysis?.judgment?.consensus_probability !==
+                      undefined
+                    ? Math.round(
+                        agentAnalysis.judgment.consensus_probability * 100
+                      )
+                    : marketData?.probability || 50
                 }
               />
             </div>
             <div className="z-10 max-w-sm space-y-4 text-center md:text-left mt-6 md:mt-0">
               <h3 className="text-xl font-bold">
-                {agentAnalysis?.summary?.consensus_probability
+                {agentAnalysis?.summary?.consensus_probability !== undefined ||
+                agentAnalysis?.judgment?.consensus_probability !== undefined
                   ? "🤖 AI Agent Consensus"
                   : "📊 Market Sentiment"}
               </h3>
               <p className="text-muted-foreground text-sm">
-                {agentAnalysis?.summary?.consensus_probability
-                  ? `Based on ${
-                      agentAnalysis.summary.analyses_count
-                    } agent analyses with ${Math.round(
-                      agentAnalysis.summary.consensus_confidence * 100
+                {(() => {
+                  const consensusProb =
+                    agentAnalysis?.summary?.consensus_probability ??
+                    agentAnalysis?.judgment?.consensus_probability;
+                  const confidence =
+                    agentAnalysis?.summary?.consensus_confidence ??
+                    agentAnalysis?.judgment?.consensus_confidence ??
+                    0;
+                  const analysesCount =
+                    agentAnalysis?.summary?.analyses_count ??
+                    agentAnalysis?.judgment?.agent_count ??
+                    1;
+
+                  if (consensusProb !== undefined) {
+                    return `Based on ${analysesCount} agent analyses with ${Math.round(
+                      confidence * 100
                     )}% confidence. ${
-                      agentAnalysis.summary.consensus_probability > 0.5
-                        ? "✅ Bet YES (probability > 50%)"
-                        : "❌ Bet NO (probability < 50%)"
-                    }`
-                  : "Current probability based on market shares."}
+                      consensusProb > 0.5
+                        ? "✅ BET YES (probability > 50%)"
+                        : "❌ BET NO (probability < 50%)"
+                    }`;
+                  }
+                  return "Current probability based on market shares.";
+                })()}
               </p>
               {agentAnalysis?.trade_proposal && (
-                <div className="mt-6 p-6 rounded-xl bg-gradient-to-r from-blue-600/30 via-purple-600/30 to-pink-600/30 border-2 border-blue-400/50 shadow-lg shadow-blue-500/20 animate-pulse">
+                <div className="mt-6 p-6 rounded-xl bg-gradient-to-r from-blue-600/30 via-purple-600/30 to-pink-600/30 border-2 border-blue-400/50 shadow-lg shadow-blue-500/20">
                   <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="w-6 h-6 text-blue-300 animate-pulse" />
+                    <Sparkles className="w-6 h-6 text-blue-300" />
                     <h4 className="font-bold text-xl text-blue-200">
                       🎯 BETTING RECOMMENDATION
                     </h4>
                   </div>
+
+                  {/* Clear YES/NO indication based on probability */}
+                  {(() => {
+                    const consensusProb =
+                      agentAnalysis.summary?.consensus_probability ??
+                      agentAnalysis.judgment?.consensus_probability;
+
+                    if (consensusProb !== undefined) {
+                      return (
+                        <div className="mb-4 p-3 rounded-lg bg-black/30 border border-blue-400/40">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-blue-200 font-semibold">
+                              Agent Probability:
+                            </span>
+                            <span className="text-lg font-bold text-white">
+                              {(consensusProb * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="text-xs text-blue-100">
+                            {consensusProb > 0.5 ? (
+                              <span className="text-green-300 font-bold">
+                                ✅ RECOMMENDATION: BET YES (Probability &gt;
+                                50%)
+                              </span>
+                            ) : (
+                              <span className="text-red-300 font-bold">
+                                ❌ RECOMMENDATION: BET NO (Probability &lt; 50%)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-3">
                     <Badge
                       variant={
@@ -861,7 +975,11 @@ export default function MarketDetailsPage() {
           </div>
 
           {/* Agent Chat / Debate */}
-          <AgentChat marketId={id} analysis={agentAnalysis} />
+          <AgentChat
+            marketId={id}
+            analysis={agentAnalysis}
+            onAnalysisUpdate={handleAnalysisUpdate}
+          />
 
           {/* Description & Evidence */}
           <div className="space-y-4">
@@ -963,27 +1081,53 @@ export default function MarketDetailsPage() {
               </div>
               <div className="space-y-3">
                 <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-sm text-muted-foreground">
-                      Consensus Probability:
-                    </span>
-                    <span className="text-2xl font-bold text-green-400">
-                      {(
-                        agentAnalysis.summary.consensus_probability * 100
-                      ).toFixed(1)}
-                      %
-                    </span>
-                  </div>
-                  <div className="h-2 bg-secondary rounded-full overflow-hidden mt-2">
-                    <div
-                      className="h-full bg-green-400 transition-all duration-500"
-                      style={{
-                        width: `${
-                          agentAnalysis.summary.consensus_probability * 100
-                        }%`,
-                      }}
-                    />
-                  </div>
+                  {(() => {
+                    const consensusProb =
+                      agentAnalysis.summary?.consensus_probability ??
+                      agentAnalysis.judgment?.consensus_probability;
+
+                    if (consensusProb === undefined) return null;
+
+                    return (
+                      <>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-sm text-muted-foreground">
+                            Consensus Probability:
+                          </span>
+                          <span className="text-2xl font-bold text-green-400">
+                            {(consensusProb * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="h-2 bg-secondary rounded-full overflow-hidden mt-2">
+                          <div
+                            className="h-full bg-green-400 transition-all duration-500"
+                            style={{
+                              width: `${consensusProb * 100}%`,
+                            }}
+                          />
+                        </div>
+                        {/* Clear YES/NO recommendation */}
+                        <div className="mt-3 pt-3 border-t border-green-500/20">
+                          <div className="text-sm font-semibold text-white">
+                            {consensusProb > 0.5 ? (
+                              <span className="text-green-300">
+                                ✅ RECOMMENDATION: BET YES
+                              </span>
+                            ) : (
+                              <span className="text-red-300">
+                                ❌ RECOMMENDATION: BET NO
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            {consensusProb > 0.5
+                              ? "Probability is above 50%, indicating YES outcome is more likely"
+                              : "Probability is below 50%, indicating NO outcome is more likely"}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-2 bg-black/20 rounded border border-border/50">
@@ -992,7 +1136,9 @@ export default function MarketDetailsPage() {
                     </div>
                     <div className="text-lg font-bold text-green-400">
                       {(
-                        agentAnalysis.summary.consensus_confidence * 100
+                        (agentAnalysis.summary?.consensus_confidence ??
+                          agentAnalysis.judgment?.consensus_confidence ??
+                          0) * 100
                       ).toFixed(0)}
                       %
                     </div>
@@ -1002,7 +1148,9 @@ export default function MarketDetailsPage() {
                       Agreement
                     </div>
                     <div className="text-lg font-bold text-green-400 capitalize">
-                      {agentAnalysis.summary.agreement_level}
+                      {agentAnalysis.summary?.agreement_level ??
+                        agentAnalysis.judgment?.agreement_level ??
+                        "N/A"}
                     </div>
                   </div>
                 </div>
@@ -1011,7 +1159,10 @@ export default function MarketDetailsPage() {
                     Agent Analyses
                   </div>
                   <div className="text-lg font-bold text-green-400">
-                    {agentAnalysis.summary.analyses_count} agents analyzed
+                    {agentAnalysis.summary?.analyses_count ??
+                      agentAnalysis.judgment?.agent_count ??
+                      1}{" "}
+                    agents analyzed
                   </div>
                 </div>
               </div>

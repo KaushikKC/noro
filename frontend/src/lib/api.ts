@@ -632,35 +632,77 @@ export async function demoResolveMarket(
 
 /**
  * Connect to WebSocket for real-time agent logs
+ * Returns null if WebSocket is not supported or connection fails
  */
 export function connectAgentWebSocket(
   marketId: string,
   onMessage: (data: Record<string, unknown>) => void,
   onError?: (error: Event) => void
-): WebSocket {
-  const wsUrl = API_BASE.replace("http://", "ws://").replace(
-    "https://",
-    "wss://"
-  );
-  const ws = new WebSocket(`${wsUrl}/ws/agent-logs/${marketId}`);
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      onMessage(data);
-    } catch (error) {
-      console.error("Error parsing WebSocket message:", error);
+): WebSocket | null {
+  // Check if WebSocket is supported
+  if (typeof WebSocket === "undefined") {
+    if (onError) {
+      onError(new Event("websocket_not_supported"));
     }
-  };
+    return null;
+  }
 
-  ws.onerror = (error) => {
-    console.error("WebSocket error:", error);
-    if (onError) onError(error);
-  };
+  try {
+    const wsUrl = API_BASE.replace("http://", "ws://").replace(
+      "https://",
+      "wss://"
+    );
+    const ws = new WebSocket(`${wsUrl}/ws/agent-logs/${marketId}`);
 
-  ws.onclose = () => {
-    console.log("WebSocket connection closed");
-  };
+    ws.onopen = () => {
+      // Only log in development
+      if (process.env.NODE_ENV === "development") {
+        console.log(`✅ WebSocket connected for market ${marketId}`);
+      }
+    };
 
-  return ws;
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onMessage(data);
+      } catch (error) {
+        // Only log in development
+        if (process.env.NODE_ENV === "development") {
+          console.error("Error parsing WebSocket message:", error);
+        }
+      }
+    };
+
+    ws.onerror = (error) => {
+      // Only log in development, don't spam console
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "WebSocket connection error (this is normal if backend WebSocket is not available):",
+          error
+        );
+      }
+      if (onError) onError(error);
+    };
+
+    ws.onclose = (event) => {
+      // Only log in development
+      if (process.env.NODE_ENV === "development") {
+        if (event.code !== 1000) {
+          // 1000 is normal closure, don't log that
+          console.log("WebSocket connection closed:", event.code, event.reason);
+        }
+      }
+    };
+
+    return ws;
+  } catch (err) {
+    // Only log in development
+    if (process.env.NODE_ENV === "development") {
+      console.warn("Failed to create WebSocket connection:", err);
+    }
+    if (onError) {
+      onError(err instanceof Event ? err : new Event("websocket_error"));
+    }
+    return null;
+  }
 }

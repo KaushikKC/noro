@@ -8,11 +8,11 @@ using System.Numerics;
 
 namespace noro
 {
-    [DisplayName("noro")]
-    [ContractAuthor("noro Team", "dev@predictx.io")]
+    [DisplayName("NoroMarket")]
+    [ContractAuthor("noro-team", "dev@noro.io")]
     [ContractVersion("0.1.0")]
     [ContractPermission("*")]
-    [ContractDescription("Decentralized prediction market platform on Neo blockchain")]
+    [ContractDescription("Decentralized AI-powered prediction market platform on Neo blockchain")]
     public class NoroMarket : SmartContract
     {
         // Contract owner - TODO: Replace with actual owner address (use your wallet's script hash)

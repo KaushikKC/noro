@@ -1,0 +1,51 @@
+[
+  {
+    "question": "Will a new CAR-T cell therapy be approved by the FDA for treating solid tumors by December 31, 2025?",
+    "description": "CAR-T cell therapy has shown success in blood cancers, but solid tumors remain challenging. This market predicts whether the FDA will approve a CAR-T therapy specifically for solid tumors (lung, breast, pancreatic, etc.) by the end of 2025. Recent clinical trials and research progress will be key indicators.",
+    "category": "Medical",
+    "resolve_date": "2025-12-31T23:59:59Z",
+    "oracle_url": "pubmed",
+    "initial_liquidity": 100.0
+  },
+  {
+    "question": "Will a quantum computer achieve quantum advantage for a practical real-world problem by June 30, 2026?",
+    "description": "Quantum advantage (also called quantum supremacy) means a quantum computer solves a problem that classical computers cannot solve in a reasonable time. This market predicts whether a quantum computer will demonstrate this for a practical application (not just a contrived problem) by mid-2026. Companies like Google, IBM, and others are racing toward this milestone.",
+    "category": "Technology",
+    "resolve_date": "2026-06-30T23:59:59Z",
+    "oracle_url": "arxiv",
+    "initial_liquidity": 150.0
+  },
+  {
+    "question": "Will the global average temperature in 2025 exceed the previous record high set in 2023?",
+    "description": "Climate scientists track global average temperatures annually. 2023 was the warmest year on record. This market predicts whether 2025 will break that record, considering ongoing climate change trends, El Niño/La Niña patterns, and greenhouse gas emissions. Data from NASA, NOAA, and other climate monitoring organizations will be used for resolution.",
+    "category": "Climate",
+    "resolve_date": "2026-01-15T23:59:59Z",
+    "oracle_url": "climate",
+    "initial_liquidity": 80.0
+  },
+  {
+    "question": "Will a new Alzheimer's disease treatment receive FDA approval that shows significant cognitive improvement (at least 25% improvement on ADAS-Cog scale) by December 31, 2026?",
+    "description": "Alzheimer's disease affects millions worldwide, and effective treatments remain limited. This market predicts whether a new treatment will be approved that demonstrates substantial cognitive improvement (25% or more on the ADAS-Cog assessment scale) by end of 2026. Recent research on amyloid-beta, tau proteins, and other therapeutic approaches will inform this prediction.",
+    "category": "Medical",
+    "resolve_date": "2026-12-31T23:59:59Z",
+    "oracle_url": "pubmed",
+    "initial_liquidity": 120.0
+  },
+  {
+    "question": "Will a nuclear fusion reactor achieve net energy gain (Q > 1.0) for at least 30 continuous seconds by December 31, 2027?",
+    "description": "Nuclear fusion could provide clean, abundant energy. While brief net energy gain has been achieved, sustained operation is the next milestone. This market predicts whether a fusion reactor will maintain net energy gain (producing more energy than consumed) for at least 30 continuous seconds by end of 2027. Projects like ITER, Commonwealth Fusion Systems, and others are working toward this goal.",
+    "category": "Energy",
+    "resolve_date": "2027-12-31T23:59:59Z",
+    "oracle_url": "arxiv",
+    "initial_liquidity": 200.0
+  },
+  {
+    "question": "Will CRISPR-based gene editing successfully treat a genetic disease in a Phase 3 clinical trial with positive results published by December 31, 2026?",
+    "description": "CRISPR gene editing technology has shown promise in early trials for diseases like sickle cell anemia and beta-thalassemia. This market predicts whether a CRISPR-based treatment will complete Phase 3 trials with positive results (meeting primary endpoints) and have results published in a peer-reviewed journal by end of 2026. Success would mark a major milestone for gene therapy.",
+    "category": "Medical",
+    "resolve_date": "2026-12-31T23:59:59Z",
+    "oracle_url": "pubmed",
+    "initial_liquidity": 180.0
+  }
+]
+

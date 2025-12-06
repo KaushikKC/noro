@@ -42,8 +42,8 @@ _default_rpc_url = (
 )
 NEO_RPC_URL = os.getenv("NEO_RPC_URL", _default_rpc_url)
 # Use same contract hash as frontend
-# Frontend uses: 0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a
-NEO_CONTRACT_HASH = os.getenv("NEO_CONTRACT_HASH", "0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a")
+# Frontend uses: 0x1974aac54640ec80413e2229003b617daf849a13
+NEO_CONTRACT_HASH = os.getenv("NEO_CONTRACT_HASH", "0x1974aac54640ec80413e2229003b617daf849a13")
 # NeoFS endpoint - should NOT include /v1 (client adds it)
 NEOFS_ENDPOINT = os.getenv("NEOFS_ENDPOINT", "https://rest.fs.neo.org")
 # Remove /v1 suffix if present (the client adds it automatically)

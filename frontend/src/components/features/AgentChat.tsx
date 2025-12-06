@@ -35,9 +35,11 @@ interface AgentMessage {
 export function AgentChat({
   marketId,
   analysis,
+  onAnalysisUpdate,
 }: {
   marketId: string;
   analysis?: AgentAnalysis | null;
+  onAnalysisUpdate?: (analysis: AgentAnalysis) => void;
 }) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -117,8 +119,12 @@ export function AgentChat({
       setMessages(msgs);
       setIsLoading(false);
       setError(null);
+      // Notify parent component about the analysis
+      if (onAnalysisUpdate) {
+        onAnalysisUpdate(analysis);
+      }
     }
-  }, [analysis]);
+  }, [analysis, onAnalysisUpdate]);
 
   // Fetch initial analysis only if not provided as prop
   useEffect(() => {
@@ -137,6 +143,10 @@ export function AgentChat({
         const fetchedAnalysis = await analyzeMarket(marketId);
         const msgs = convertAnalysisToMessages(fetchedAnalysis);
         setMessages(msgs);
+        // Notify parent component about the fetched analysis
+        if (onAnalysisUpdate) {
+          onAnalysisUpdate(fetchedAnalysis);
+        }
       } catch (err) {
         console.error("Error fetching analysis:", err);
         const errorMessage =
@@ -162,55 +172,61 @@ export function AgentChat({
     fetchAnalysis();
   }, [marketId, analysis]);
 
-  // Connect WebSocket for real-time updates
+  // Connect WebSocket for real-time updates (optional - component works without it)
   useEffect(() => {
     if (!marketId) return;
 
-    try {
-      const ws = connectAgentWebSocket(
-        marketId,
-        (data) => {
-          setIsConnected(true);
-          if (data.type === "full_analysis" && data.data) {
-            const analysisData = data.data as AgentAnalysis;
-            const msgs = convertAnalysisToMessages(analysisData);
-            setMessages(msgs);
-          } else if (data.type === "agent_update") {
-            // Add individual agent update
-            const agentRole = (data.agent as AgentRole) || "Analyzer";
-            const updateType =
-              (data.updateType as "analysis" | "trade" | "verdict") ||
-              "analysis";
-            const newMsg: AgentMessage = {
-              id: `update-${Date.now()}`,
-              agent: agentRole,
-              type: updateType,
-              content:
-                (data.content as string) ||
-                (data.message as string) ||
-                "Agent update",
-              confidence: (data.confidence as number) || 0.5,
-              timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, newMsg]);
-          }
-        },
-        () => {
-          setIsConnected(false);
+    // WebSocket is optional - if it fails, component still works with analysis prop
+    const ws = connectAgentWebSocket(
+      marketId,
+      (data) => {
+        setIsConnected(true);
+        if (data.type === "full_analysis" && data.data) {
+          const analysisData = data.data as AgentAnalysis;
+          const msgs = convertAnalysisToMessages(analysisData);
+          setMessages(msgs);
+        } else if (data.type === "agent_update") {
+          // Add individual agent update
+          const agentRole = (data.agent as AgentRole) || "Analyzer";
+          const updateType =
+            (data.updateType as "analysis" | "trade" | "verdict") || "analysis";
+          const newMsg: AgentMessage = {
+            id: `update-${Date.now()}`,
+            agent: agentRole,
+            type: updateType,
+            content:
+              (data.content as string) ||
+              (data.message as string) ||
+              "Agent update",
+            confidence: (data.confidence as number) || 0.5,
+            timestamp: Date.now(),
+          };
+          setMessages((prev) => [...prev, newMsg]);
         }
-      );
+      },
+      () => {
+        setIsConnected(false);
+        // WebSocket failure is not critical - component works without it
+      }
+    );
 
+    if (ws) {
       wsRef.current = ws;
-
-      return () => {
-        if (wsRef.current) {
-          wsRef.current.close();
-        }
-      };
-    } catch (err) {
-      console.error("Failed to connect WebSocket:", err);
+    } else {
+      // WebSocket not available - that's okay, component works with analysis prop
       setIsConnected(false);
     }
+
+    return () => {
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          // Ignore errors when closing
+        }
+        wsRef.current = null;
+      }
+    };
   }, [marketId]);
 
   useEffect(() => {
