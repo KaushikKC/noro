@@ -36,9 +36,9 @@ class AnalyzerAgent:
         # Use environment variable or default to gemini
         import os
         if llm_provider is None:
-            llm_provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini")
+            llm_provider = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")  # Using DeepSeek (paid account)
         if model_name is None:
-            model_name = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
+            model_name = os.getenv("DEFAULT_MODEL", "deepseek-chat")  # DeepSeek model
         """
         Initialize Analyzer Agent
         
@@ -68,9 +68,16 @@ class AnalyzerAgent:
         crypto_tool = CryptoTool()
         
         # Create LLM
+        # Set max_tokens for DeepSeek (valid range: 1-8192)
+        import os
+        max_tokens = None
+        if self.llm_provider == "deepseek":
+            max_tokens = int(os.getenv("DEEPSEEK_MAX_TOKENS", "8192"))  # Default to 8192 for DeepSeek
+        
         llm = ChatBot(
             llm_provider=self.llm_provider,
-            model_name=self.model_name
+            model_name=self.model_name,
+            max_tokens=max_tokens if max_tokens else None
         )
         
         # Create agent with all real data tools
@@ -121,22 +128,31 @@ Output format should be JSON with:
             return self._fallback_analyze(market_question)
         
         try:
-            # Create analysis prompt
+            # Reset agent state before running (fixes "not in IDLE state" error)
+            if hasattr(self.agent, 'clear'):
+                self.agent.clear()
+            elif hasattr(self.agent, 'reset'):
+                self.agent.reset()
+            
+            # Create analysis prompt (optimized to reduce tool calls)
             prompt = f"""Analyze the following prediction market question:
 
 "{market_question}"
 
 Please:
-1. Use appropriate tools based on the question type:
-   - For scientific questions: Use pubmed_search() and arxiv_search()
-   - For weather/climate questions: Use climate_data() to get real weather data
-   - For crypto questions: Use crypto_data() to get real price data
-2. Analyze the REAL data from these sources (NO MOCK DATA)
+1. Use ONLY ONE most relevant tool based on the question type (to minimize API calls):
+   - For scientific/medical questions: Use pubmed_search() OR arxiv_search() (choose one)
+   - For weather/climate questions: Use climate_data()
+   - For crypto/finance questions: Use crypto_data()
+2. Analyze the REAL data from this source (NO MOCK DATA)
 3. Calculate a probability (0-1) that the outcome will occur based on REAL evidence
 4. Provide your confidence (0-1) in this analysis
-5. Summarize the key evidence from REAL sources
+5. Summarize the key evidence from the source
 
-IMPORTANT: Only use real APIs. Never use mock or placeholder data.
+IMPORTANT: 
+- Use only ONE tool to minimize API requests
+- Only use real APIs. Never use mock or placeholder data.
+- Be efficient with tool calls
 
 Return your analysis in JSON format with: probability, confidence, evidence, and sources_count."""
             

@@ -55,6 +55,8 @@ export default function MarketDetailsPage() {
     agentProbability?: number;
     neofsObjectId?: string;
     neofsUrl?: string;
+    yesShares?: number;
+    noShares?: number;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -235,11 +237,35 @@ export default function MarketDetailsPage() {
             ? new Date(backendMarket.created_at).toLocaleDateString()
             : new Date().toLocaleDateString();
 
-          // Type assertion for NeoFS fields
-          const marketWithNeoFS = backendMarket as typeof backendMarket & {
+          // Type assertion for NeoFS and shares fields
+          const marketWithExtras = backendMarket as typeof backendMarket & {
             neofs_object_id?: string;
             neofs_url?: string;
+            yes_shares?: number;
+            no_shares?: number;
+            YesShares?: number;
+            NoShares?: number;
           };
+
+          // Extract shares for volume calculation
+          const yesShares =
+            typeof marketWithExtras.yes_shares === "number"
+              ? marketWithExtras.yes_shares
+              : typeof marketWithExtras.YesShares === "number"
+              ? marketWithExtras.YesShares
+              : 0;
+          const noShares =
+            typeof marketWithExtras.no_shares === "number"
+              ? marketWithExtras.no_shares
+              : typeof marketWithExtras.NoShares === "number"
+              ? marketWithExtras.NoShares
+              : 0;
+
+          // Calculate volume from shares if available, otherwise use backend volume
+          const calculatedVolume =
+            yesShares > 0 || noShares > 0
+              ? formatVolume(yesShares, noShares)
+              : backendMarket.volume || "0";
 
           setMarketData({
             question: backendMarket.question || "",
@@ -252,7 +278,7 @@ export default function MarketDetailsPage() {
               : "Unknown",
             created: createdFormatted,
             resolveDate: resolveDateFormatted,
-            volume: backendMarket.volume || "0",
+            volume: calculatedVolume,
             probability: backendMarket.probability || 50,
             resolved: backendMarket.isResolved || false,
             outcome:
@@ -263,8 +289,10 @@ export default function MarketDetailsPage() {
                 ? "No"
                 : undefined,
             oracleUrl: backendMarket.oracle_url || "",
-            neofsObjectId: marketWithNeoFS.neofs_object_id || undefined,
-            neofsUrl: marketWithNeoFS.neofs_url || undefined,
+            neofsObjectId: marketWithExtras.neofs_object_id || undefined,
+            neofsUrl: marketWithExtras.neofs_url || undefined,
+            yesShares: yesShares,
+            noShares: noShares,
           });
           console.log(`✅ [MARKET DETAIL] Market ${id} loaded from database`);
         } else if (
@@ -341,6 +369,8 @@ export default function MarketDetailsPage() {
                 ? "No"
                 : undefined,
             oracleUrl: oracleUrl,
+            yesShares: yesShares,
+            noShares: noShares,
           });
           console.log(`✅ [MARKET DETAIL] Market ${id} loaded successfully`);
         } else {
@@ -378,7 +408,7 @@ export default function MarketDetailsPage() {
         // Try to get trade proposal (only for real markets)
         const proposal = await getTradeProposal(id);
         setTradeProposal(proposal);
-      } catch (err) {
+      } catch {
         // Trade proposal might not be available yet, that's okay
         console.log("Trade proposal not available yet");
       }
@@ -422,12 +452,18 @@ export default function MarketDetailsPage() {
         setTradeProposal(analysis.trade_proposal);
       }
 
-      // Update probability if available
+      // Update probability when analysis completes
       if (analysis.summary?.consensus_probability && marketData) {
+        const consensusProb = analysis.summary.consensus_probability * 100;
+        
+        // Update both agentProbability and main probability field
         setMarketData({
           ...marketData,
-          agentProbability: analysis.summary.consensus_probability * 100,
+          probability: consensusProb, // Update main probability to show in gauge
+          agentProbability: consensusProb,
         });
+        
+        console.log(`✅ Updated probability to ${consensusProb.toFixed(1)}% from agent analysis`);
       }
     } catch (err) {
       console.error("Error analyzing market:", err);
@@ -455,6 +491,32 @@ export default function MarketDetailsPage() {
           neofs_url?: string;
         };
 
+        // Extract shares for volume calculation
+        const marketWithShares = updatedMarket as typeof updatedMarket & {
+          yes_shares?: number;
+          no_shares?: number;
+          YesShares?: number;
+          NoShares?: number;
+        };
+        const yesShares =
+          typeof marketWithShares.yes_shares === "number"
+            ? marketWithShares.yes_shares
+            : typeof marketWithShares.YesShares === "number"
+            ? marketWithShares.YesShares
+            : 0;
+        const noShares =
+          typeof marketWithShares.no_shares === "number"
+            ? marketWithShares.no_shares
+            : typeof marketWithShares.NoShares === "number"
+            ? marketWithShares.NoShares
+            : 0;
+
+        // Calculate volume from shares if available
+        const calculatedVolume =
+          yesShares > 0 || noShares > 0
+            ? formatVolume(yesShares, noShares)
+            : updatedMarket.volume || "0";
+
         setMarketData({
           question: updatedMarket.question || "",
           description: updatedMarket.description || "No description",
@@ -470,7 +532,7 @@ export default function MarketDetailsPage() {
           resolveDate: updatedMarket.resolveDate
             ? new Date(updatedMarket.resolveDate).toLocaleDateString()
             : "Unknown",
-          volume: updatedMarket.volume || "0",
+          volume: calculatedVolume,
           probability: updatedMarket.probability || 50,
           resolved: updatedMarket.isResolved || false,
           outcome:
@@ -483,6 +545,8 @@ export default function MarketDetailsPage() {
           oracleUrl: updatedMarket.oracle_url || "",
           neofsObjectId: marketWithNeoFS.neofs_object_id || undefined,
           neofsUrl: marketWithNeoFS.neofs_url || undefined,
+          yesShares: yesShares,
+          noShares: noShares,
         });
       }
     } catch (err) {
@@ -718,8 +782,8 @@ export default function MarketDetailsPage() {
             <div className="z-10 max-w-sm space-y-4 text-center md:text-left mt-6 md:mt-0">
               <h3 className="text-xl font-bold">
                 {agentAnalysis?.summary?.consensus_probability
-                  ? "Agent Consensus Probability"
-                  : "Market Sentiment"}
+                  ? "🤖 AI Agent Consensus"
+                  : "📊 Market Sentiment"}
               </h3>
               <p className="text-muted-foreground text-sm">
                 {agentAnalysis?.summary?.consensus_probability
@@ -727,56 +791,70 @@ export default function MarketDetailsPage() {
                       agentAnalysis.summary.analyses_count
                     } agent analyses with ${Math.round(
                       agentAnalysis.summary.consensus_confidence * 100
-                    )}% confidence`
+                    )}% confidence. ${
+                      agentAnalysis.summary.consensus_probability > 0.5
+                        ? "✅ Bet YES (probability > 50%)"
+                        : "❌ Bet NO (probability < 50%)"
+                    }`
                   : "Current probability based on market shares."}
               </p>
               {agentAnalysis?.trade_proposal && (
-                <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-blue-500/20 to-purple-500/20 border-2 border-blue-500/30">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Sparkles className="w-5 h-5 text-blue-400" />
-                    <h4 className="font-bold text-lg text-blue-400">
-                      Agent Recommendation
+                <div className="mt-6 p-6 rounded-xl bg-gradient-to-r from-blue-600/30 via-purple-600/30 to-pink-600/30 border-2 border-blue-400/50 shadow-lg shadow-blue-500/20 animate-pulse">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="w-6 h-6 text-blue-300 animate-pulse" />
+                    <h4 className="font-bold text-xl text-blue-200">
+                      🎯 BETTING RECOMMENDATION
                     </h4>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-3">
                     <Badge
                       variant={
                         agentAnalysis.trade_proposal.action === "BUY_YES"
                           ? "default"
                           : "destructive"
                       }
-                      className="text-lg px-4 py-2"
+                      className="text-xl px-6 py-3 font-bold shadow-lg"
                     >
                       {agentAnalysis.trade_proposal.action === "BUY_YES"
-                        ? "BUY YES"
-                        : "BUY NO"}
+                        ? "✅ BUY YES"
+                        : "❌ BUY NO"}
                     </Badge>
-                    <span className="text-white font-bold">
-                      {agentAnalysis.trade_proposal.amount.toFixed(2)} GAS
-                    </span>
-                    <span className="text-muted-foreground text-sm">
-                      (
-                      {Math.round(
-                        agentAnalysis.trade_proposal.confidence * 100
-                      )}
-                      % confidence)
-                    </span>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                      <span className="text-white font-bold text-lg">
+                        💰 {agentAnalysis.trade_proposal.amount.toFixed(2)} GAS
+                      </span>
+                      <span className="text-blue-200 font-semibold text-sm bg-blue-500/20 px-3 py-1 rounded-full">
+                        {Math.round(
+                          agentAnalysis.trade_proposal.confidence * 100
+                        )}
+                        % confidence
+                      </span>
+                    </div>
                   </div>
                   {agentAnalysis.trade_proposal.reasoning && (
-                    <p className="text-sm text-muted-foreground mt-2 italic">
-                      &quot;{agentAnalysis.trade_proposal.reasoning}&quot;
-                    </p>
+                    <div className="mt-3 p-3 bg-black/20 rounded-lg border border-blue-400/30">
+                      <p className="text-sm text-blue-100 italic">
+                        💡 &quot;{agentAnalysis.trade_proposal.reasoning}&quot;
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
-              <div className="flex gap-4 justify-center md:justify-start">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-white">
+              <div className="flex gap-4 justify-center md:justify-start mt-4">
+                <div className="text-center p-4 rounded-lg bg-secondary/20 border border-border/50">
+                  <div className="text-3xl font-bold text-white mb-1">
                     {marketData.volume}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    Total Volume
+                  <div className="text-xs text-muted-foreground font-semibold">
+                    📊 Total Volume
                   </div>
+                  {marketData.yesShares !== undefined &&
+                    marketData.noShares !== undefined && (
+                      <div className="text-xs text-muted-foreground mt-2">
+                        Yes: {formatVolume(marketData.yesShares, 0)} | No:{" "}
+                        {formatVolume(marketData.noShares, 0)}
+                      </div>
+                    )}
                 </div>
               </div>
             </div>

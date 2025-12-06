@@ -142,6 +142,20 @@ export async function fetchMarket(
         neofs_object_id: m.neofs_object_id,
         neofs_url: m.neofs_url,
       });
+      // Extract shares for volume calculation
+      const yesShares =
+        typeof m.yes_shares === "number"
+          ? m.yes_shares
+          : typeof m.YesShares === "number"
+          ? m.YesShares
+          : 0;
+      const noShares =
+        typeof m.no_shares === "number"
+          ? m.no_shares
+          : typeof m.NoShares === "number"
+          ? m.NoShares
+          : 0;
+
       const result = {
         id: m.id || m.market_id || marketId,
         question: m.question || m.Question || "",
@@ -153,18 +167,7 @@ export async function fetchMarket(
         probability: typeof m.probability === "number" ? m.probability : 50,
         volume:
           (typeof m.volume === "string" ? m.volume : undefined) ||
-          formatVolume(
-            typeof m.yes_shares === "number"
-              ? m.yes_shares
-              : typeof m.YesShares === "number"
-              ? m.YesShares
-              : 0,
-            typeof m.no_shares === "number"
-              ? m.no_shares
-              : typeof m.NoShares === "number"
-              ? m.NoShares
-              : 0
-          ),
+          formatVolume(yesShares, noShares),
         isResolved: Boolean(m.is_resolved || m.isResolved || m.Resolved),
         outcome: m.outcome || m.Outcome,
         creator: m.creator || m.Creator,
@@ -172,6 +175,8 @@ export async function fetchMarket(
         oracle_url: m.oracle_url || m.oracleUrl || m.OracleUrl,
         neofs_object_id: m.neofs_object_id || m.neofsObjectId,
         neofs_url: m.neofs_url || m.neofsUrl,
+        yes_shares: yesShares,
+        no_shares: noShares,
       } as any;
       console.log(`✅ [API] Successfully parsed market ${marketId}`);
       return result;

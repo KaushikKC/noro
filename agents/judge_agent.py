@@ -36,9 +36,9 @@ class JudgeAgent:
         # Use environment variable or default to gemini
         import os
         if llm_provider is None:
-            llm_provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini")
+            llm_provider = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")  # Using DeepSeek (paid account)
         if model_name is None:
-            model_name = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
+            model_name = os.getenv("DEFAULT_MODEL", "deepseek-chat")  # DeepSeek model
         """
         Initialize Judge Agent
         
@@ -56,9 +56,16 @@ class JudgeAgent:
     def _initialize_agent(self):
         """Initialize the SpoonOS agent"""
         # Create LLM
+        # Set max_tokens for DeepSeek (valid range: 1-8192)
+        import os
+        max_tokens = None
+        if self.llm_provider == "deepseek":
+            max_tokens = int(os.getenv("DEEPSEEK_MAX_TOKENS", "8192"))  # Default to 8192 for DeepSeek
+        
         llm = ChatBot(
             llm_provider=self.llm_provider,
-            model_name=self.model_name
+            model_name=self.model_name,
+            max_tokens=max_tokens if max_tokens else None
         )
         
         # Judge agent doesn't need external tools - it analyzes analyses
@@ -126,6 +133,12 @@ Output format should be JSON with:
             return self._fallback_aggregate(analyses)
         
         try:
+            # Reset agent state before running (fixes "not in IDLE state" error)
+            if hasattr(self.agent, 'clear'):
+                self.agent.clear()
+            elif hasattr(self.agent, 'reset'):
+                self.agent.reset()
+            
             # Prepare prompt with all analyses
             analyses_json = json.dumps(analyses, indent=2)
             
