@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { WalletConnector } from "@/components/features/WalletConnector";
 import { Button } from "@/components/ui/button";
 import { PlayCircle, Plus } from "lucide-react";
@@ -10,9 +11,13 @@ export function Navbar() {
     <nav className="h-16 fixed top-0 left-0 right-0 z-40 glass border-b border-border/50 px-6 flex items-center justify-between">
       <div className="flex items-center gap-12">
         <Link href="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center font-bold text-black text-xl">
-            N
-          </div>
+          <Image
+            src="/logo.svg"
+            alt="Noro Logo"
+            width={32}
+            height={32}
+            className="w-8 h-8 rounded-lg object-contain"
+          />
           <span className="text-xl font-bold tracking-tight">Noro</span>
         </Link>
       </div>

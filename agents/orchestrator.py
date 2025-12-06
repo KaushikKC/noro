@@ -91,7 +91,7 @@ class NoroOrchestrator:
         print("\n💰 Running Trader Agent...")
         # Add longer delay to avoid rate limits (Gemini free tier is strict)
         import asyncio
-        await asyncio.sleep(5)  # 5 second delay for Gemini free tier
+        await asyncio.sleep(15)  # Increased to 15 seconds for Gemini free tier
         try:
             trade_proposal = await self.trader.propose_trade(
                 analysis,
@@ -132,8 +132,10 @@ class NoroOrchestrator:
         import asyncio
         for i in range(additional_analyses_count):
             print(f"   Running analysis {i+2}/{additional_analyses_count + 1}...")
-            # Add longer delay to avoid rate limits (Gemini free tier is strict)
-            await asyncio.sleep(10)  # 10 second delay between calls for Gemini free tier
+            # Add longer delay with exponential backoff to avoid rate limits (Gemini free tier is strict)
+            delay = 20 + (i * 5)  # Start at 20 seconds, increase by 5s per iteration
+            print(f"   ⏳ Waiting {delay} seconds to avoid rate limits...")
+            await asyncio.sleep(delay)
             try:
                 additional_analysis = await self.analyzer.analyze(market_question, max_papers=max_papers)
                 analyses.append(additional_analysis)
@@ -142,21 +144,24 @@ class NoroOrchestrator:
                 error_str = str(e).lower()
                 if "rate limit" in error_str or "quota" in error_str:
                     print(f"   ⚠️  Analysis {i+2} hit rate limit: {e}")
-                    print(f"   💡 Using first analysis as fallback")
+                    print(f"   💡 Skipping additional analysis, using first analysis only")
+                    # Don't add duplicate - just skip this analysis and stop trying
+                    break  # Stop trying additional analyses if we hit rate limit
                 else:
                     print(f"   ⚠️  Analysis {i+2} failed: {e}")
-                # Use first analysis as fallback if subsequent ones fail
-                analyses.append(analysis)
+                    # Use first analysis as fallback if subsequent ones fail
+                    analyses.append(analysis)
         
         # Judge aggregates all analyses (with longer delay)
-        await asyncio.sleep(5)  # 5 second delay before judge
+        print(f"   ⏳ Waiting 15 seconds before judge aggregation...")
+        await asyncio.sleep(15)  # Increased to 15 seconds before judge
         try:
             judgment = await self.judge.aggregate(analyses, market_question)
         except Exception as e:
             error_str = str(e).lower()
             if "rate limit" in error_str or "quota" in error_str:
                 print(f"   ⚠️  Judge agent hit rate limit: {e}")
-                print(f"   💡 Using weighted average fallback")
+                print(f"   💡 Using weighted average fallback (no additional API call)")
             else:
                 print(f"   ⚠️  Judge agent error: {e}")
             # Fallback judgment using weighted average of available analyses

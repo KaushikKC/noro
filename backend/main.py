@@ -65,7 +65,9 @@ if not os.getenv("NEOFS_BASE_URL"):
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 # Initialize services (lazy initialization for async clients)
-neo_client = NeoRPCClient(NEO_RPC_URL)
+# Use testnet RPC if localhost is specified
+_rpc_url = NEO_RPC_URL if NEO_RPC_URL != "http://localhost:20332" else _default_rpc_url
+neo_client = NeoRPCClient(_rpc_url)
 # Contract and oracle clients will be initialized in lifespan
 contract_client = None
 oracle_client = None
@@ -563,57 +565,86 @@ async def list_markets():
     Enriches with contract data (shares, probabilities, etc.)
     """
     try:
-        # Fetch from database (fast)
+        # Fetch from database (fast) - include both "active" and "confirmed" markets
         print(f"💾 [LIST] Fetching markets from database...")
-        markets = list_markets_from_db(status="active", limit=100)
+        import sqlite3
+        import os
+        db_path = os.getenv("MARKET_DB_PATH", "markets.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM markets 
+            WHERE status IN ('active', 'confirmed')
+            ORDER BY created_timestamp DESC 
+            LIMIT 100
+        """)
+        rows = cursor.fetchall()
+        markets = [dict(row) for row in rows]
+        conn.close()
         print(f"💾 [LIST] Found {len(markets)} markets in database")
         
-        # Enrich with contract data if available
-        if contract_client and markets:
-            try:
-                market_count = await contract_client.get_market_count()
-                if market_count > 0:
-                    print(f"📊 [LIST] Enriching with contract data ({market_count} markets on-chain)...")
-                    
-                    # Create lookup for contract data by market_id
-                    contract_data_map = {}
-                    for i in range(1, market_count + 1):
-                        try:
-                            contract_market = await contract_client.get_market(str(i))
-                            if contract_market:
-                                contract_data_map[str(i)] = contract_market
-                        except:
-                            continue
-                    
-                    # Update markets with contract data
-                    for market in markets:
-                        market_id = str(market.get("market_id") or market.get("id") or "")
-                        if market_id in contract_data_map:
-                            contract_market = contract_data_map[market_id]
-                            # Update database with latest contract data
-                            update_market_onchain_data(market_id, {
-                                "yes_shares": contract_market.get("yes_shares", 0),
-                                "no_shares": contract_market.get("no_shares", 0),
-                                "is_resolved": contract_market.get("resolved", False),
-                                "outcome": contract_market.get("outcome"),
-                                "probability": contract_market.get("probability", 50),
-                            })
-                            # Also update in-memory data for response
-                            market.update({
-                                "yes_shares": contract_market.get("yes_shares", 0),
-                                "no_shares": contract_market.get("no_shares", 0),
-                                "is_resolved": contract_market.get("resolved", False),
-                                "outcome": contract_market.get("outcome"),
-                                "probability": contract_market.get("probability", 50),
-                            })
-                except Exception as e:
-                    print(f"⚠️ [LIST] Contract enrichment error: {e}")
+        # Enrich with contract data if available (temporarily disabled due to parsing errors)
+        # if contract_client and markets:
+        #     try:
+        #         market_count = await contract_client.get_market_count()
+        #         if market_count > 0:
+        #             print(f"📊 [LIST] Enriching with contract data ({market_count} markets on-chain)...")
+        #             
+        #             # Create lookup for contract data by market_id
+        #             contract_data_map = {}
+        #             for i in range(1, market_count + 1):
+        #                 try:
+        #                     contract_market = await contract_client.get_market(str(i))
+        #                     if contract_market:
+        #                         contract_data_map[str(i)] = contract_market
+        #                 except:
+        #                     continue
+        #             
+        #             # Update markets with contract data
+        #             for market in markets:
+        #                 market_id = str(market.get("market_id") or market.get("id") or "")
+        #                 if market_id in contract_data_map:
+        #                     contract_market = contract_data_map[market_id]
+        #                     # Update database with latest contract data
+        #                     update_market_onchain_data(market_id, {
+        #                         "yes_shares": contract_market.get("yes_shares", 0),
+        #                         "no_shares": contract_market.get("no_shares", 0),
+        #                         "is_resolved": contract_market.get("resolved", False),
+        #                         "outcome": contract_market.get("outcome"),
+        #                         "probability": contract_market.get("probability", 50),
+        #                     })
+        #                     # Also update in-memory data for response
+        #                     market.update({
+        #                         "yes_shares": contract_market.get("yes_shares", 0),
+        #                         "no_shares": contract_market.get("no_shares", 0),
+        #                         "is_resolved": contract_market.get("resolved", False),
+        #                         "outcome": contract_market.get("outcome"),
+        #                         "probability": contract_market.get("probability", 50),
+        #                     })
+        #     except Exception as e:
+        #         print(f"⚠️ [LIST] Contract enrichment error: {e}")
         
+        # Convert SQLite Row objects to dicts for JSON serialization
+        markets_list = []
+        for market in markets:
+            if hasattr(market, 'keys'):  # SQLite Row object
+                market_dict = dict(market)
+            else:
+                market_dict = market
+            
+            # Ensure market_id is set for frontend (use market_id as id)
+            if "market_id" in market_dict and "id" not in market_dict:
+                market_dict["id"] = str(market_dict["market_id"])
+            
+            markets_list.append(market_dict)
+        
+        print(f"✅ [LIST] Returning {len(markets_list)} markets to frontend")
         return {
             "success": True,
-            "markets": markets,
-            "count": len(markets),
-            "source": "database" + ("+contract" if contract_client else "")
+            "markets": markets_list,
+            "count": len(markets_list),
+            "source": "database"
         }
     except Exception as e:
         print(f"❌ [LIST] Error: {e}")

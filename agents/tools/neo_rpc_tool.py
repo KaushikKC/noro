@@ -25,7 +25,9 @@ def call_neo_rpc(method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
     Returns:
         RPC response dictionary
     """
-    rpc_url = os.getenv("NEO_RPC_URL", "http://localhost:20332")
+    # Default to testnet RPC if not set
+    default_rpc = os.getenv("NEO_NETWORK", "testnet") == "mainnet" and "https://mainmagnet.ngd.network:443" or "https://testnet1.neo.coz.io:443"
+    rpc_url = os.getenv("NEO_RPC_URL", default_rpc)
     
     payload = {
         "jsonrpc": "2.0",
