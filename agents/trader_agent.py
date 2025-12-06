@@ -52,7 +52,13 @@ class TraderAgent:
         self.agent = None
         
         if ToolCallAgent and ChatBot and ToolManager:
-            self._initialize_agent()
+            try:
+                self._initialize_agent()
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to initialize Trader agent: {e}")
+                import traceback
+                traceback.print_exc()
+                self.agent = None
     
     def _initialize_agent(self):
         """Initialize the SpoonOS agent"""

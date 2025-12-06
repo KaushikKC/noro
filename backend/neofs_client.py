@@ -71,7 +71,69 @@ class NeoFSClient:
             "https://rest.fs.neo.org"
         )
         
-        # Initialize tools
+        # Set NeoFS configuration environment variables for tools
+        # The spoon_ai.tools.neofs_tools use NeoFSClient which expects:
+        # NEOFS_BASE_URL, NEOFS_OWNER_ADDRESS, NEOFS_PRIVATE_KEY_WIF
+        # (matching the client example you provided)
+        base_url = self.gateway_url
+        
+        # Set NEOFS_BASE_URL if not already set
+        if not os.getenv("NEOFS_BASE_URL"):
+            os.environ["NEOFS_BASE_URL"] = base_url
+        
+        # Get owner_address and private_key_wif from environment
+        # These must be set in .env file: NEOFS_OWNER_ADDRESS and NEOFS_PRIVATE_KEY_WIF
+        owner_address = os.getenv("NEOFS_OWNER_ADDRESS", "")
+        private_key_wif = os.getenv("NEOFS_PRIVATE_KEY_WIF", "")
+        
+        # CRITICAL: Set these in environment for the tools to use
+        # The tools read from environment variables, so we must set them here
+        if owner_address:
+            os.environ["NEOFS_OWNER_ADDRESS"] = owner_address
+        if private_key_wif:
+            os.environ["NEOFS_PRIVATE_KEY_WIF"] = private_key_wif
+        
+        # Debug: Check if credentials are set
+        print(f"🔍 [NEOFS] Configuration check:")
+        print(f"   NEOFS_BASE_URL: {base_url}")
+        print(f"   NEOFS_OWNER_ADDRESS: {'SET' if owner_address else 'NOT SET'} ({len(owner_address)} chars)")
+        if owner_address:
+            print(f"   Owner address preview: {owner_address[:20]}...")
+        print(f"   NEOFS_PRIVATE_KEY_WIF: {'SET' if private_key_wif else 'NOT SET'} ({len(private_key_wif)} chars)")
+        
+        if not owner_address or not private_key_wif:
+            print(f"⚠️ [NEOFS] Missing credentials! Set NEOFS_OWNER_ADDRESS and NEOFS_PRIVATE_KEY_WIF in .env")
+            print(f"   Operations will fail until credentials are set.")
+            print(f"   The ASCII error is likely because owner_address is empty or invalid.")
+        
+        # Store for reference
+        self.owner_address = owner_address
+        self.private_key_wif = private_key_wif
+        self.base_url = base_url
+        
+        # Validate that owner_address and private_key_wif are ASCII-only
+        if owner_address:
+            try:
+                owner_address.encode('ascii')
+                print(f"✅ [NEOFS] Owner address is ASCII-valid")
+            except UnicodeEncodeError:
+                raise ValueError(f"NEOFS_OWNER_ADDRESS contains non-ASCII characters: {owner_address[:20]}...")
+        else:
+            print(f"❌ [NEOFS] Owner address is EMPTY - this will cause ASCII errors!")
+        
+        if private_key_wif:
+            try:
+                private_key_wif.encode('ascii')
+                print(f"✅ [NEOFS] Private key is ASCII-valid")
+            except UnicodeEncodeError:
+                raise ValueError(f"NEOFS_PRIVATE_KEY_WIF contains non-ASCII characters")
+        else:
+            print(f"❌ [NEOFS] Private key is EMPTY - this will cause ASCII errors!")
+        
+        # Note: The tools will read these from environment variables automatically
+        # No need to pass them explicitly to tool constructors
+        
+        # Initialize tools (they will read from environment variables)
         self.create_bearer_token_tool = CreateBearerTokenTool()
         self.create_container_tool = CreateContainerTool()
         self.upload_object_tool = UploadObjectTool()
@@ -110,24 +172,129 @@ class NeoFSClient:
         Returns:
             Dict containing bearer token information
         """
-        params = {
-            "token_type": token_type,
-            "lifetime": lifetime
-        }
-        
-        if token_type == "container":
-            if verb:
-                params["verb"] = verb
-            if container_id:
-                params["container_id"] = container_id
-        elif token_type == "object":
-            if operation:
-                params["operation"] = operation
-            if container_id:
-                params["container_id"] = container_id
-        
-        result = await self.create_bearer_token_tool.execute(**params)
-        return result.output if hasattr(result, 'output') else result
+        try:
+            print(f"🔑 [NEOFS] Creating bearer token: type={token_type}, verb={verb}, operation={operation}")
+            
+            # The tool signature shows: execute(token_type, verb='PUT', operation='PUT', container_id='', lifetime=100)
+            # For container tokens with verb="PUT" (creating container), container_id should be empty string
+            # The tool needs all parameters explicitly set
+            params = {
+                "token_type": token_type,
+                "lifetime": lifetime
+            }
+            
+            # For container tokens
+            if token_type == "container":
+                # Container tokens use 'verb' parameter
+                params["verb"] = verb or "PUT"  # Default to PUT if not specified
+                params["operation"] = ""  # Empty for container tokens
+                # For PUT (create), container_id should be empty string
+                # For DELETE/SETEACL, container_id is required
+                if params["verb"] in ["DELETE", "SETEACL"]:
+                    if not container_id:
+                        raise ValueError(f"container_id is required for {params['verb']} operation")
+                    params["container_id"] = container_id
+                else:
+                    params["container_id"] = ""  # Empty for PUT (create new container)
+            
+            # For object tokens
+            elif token_type == "object":
+                # Object tokens use 'operation' parameter
+                params["operation"] = operation or "PUT"  # Default to PUT if not specified
+                params["verb"] = ""  # Empty for object tokens
+                params["container_id"] = container_id or ""  # Optional for object tokens
+            
+            print(f"🔑 [NEOFS] Bearer token params: {params}")
+            print(f"🔑 [NEOFS] Owner address available: {self.owner_address[:20] if self.owner_address else 'NOT SET'}...")
+            print(f"🔑 [NEOFS] Private key available: {'SET' if self.private_key_wif else 'NOT SET'}")
+            
+            # CRITICAL: Verify environment variables are set before calling tool
+            # The tool reads owner_address from NEOFS_OWNER_ADDRESS env var
+            env_owner = os.getenv("NEOFS_OWNER_ADDRESS", "")
+            env_key = os.getenv("NEOFS_PRIVATE_KEY_WIF", "")
+            print(f"🔑 [NEOFS] Environment check - Owner: {'SET' if env_owner else 'NOT SET'}, Key: {'SET' if env_key else 'NOT SET'}")
+            
+            if not env_owner or not env_key:
+                error_msg = (
+                    f"NeoFS credentials not set in environment! "
+                    f"Owner: {'SET' if env_owner else 'MISSING'}, "
+                    f"Key: {'SET' if env_key else 'MISSING'}. "
+                    f"Set NEOFS_OWNER_ADDRESS and NEOFS_PRIVATE_KEY_WIF in .env file."
+                )
+                print(f"❌ [NEOFS] {error_msg}")
+                raise ValueError(error_msg)
+            
+            # Verify owner_address is ASCII before tool call
+            try:
+                env_owner.encode('ascii')
+            except UnicodeEncodeError:
+                raise ValueError(f"NEOFS_OWNER_ADDRESS contains non-ASCII characters: {env_owner[:20]}...")
+            
+            result = await self.create_bearer_token_tool.execute(**params)
+            output = result.output if hasattr(result, 'output') else result
+            
+            # Debug: Check what we got back (but strip emojis for display)
+            output_str = str(output)
+            # Remove emojis for logging
+            import re
+            output_clean = re.sub(r'[^\x00-\x7F]+', '[NON-ASCII]', output_str)
+            print(f"🔑 [NEOFS] Tool result type: {type(output)}")
+            print(f"🔑 [NEOFS] Tool result (first 200 chars, emojis removed): {output_clean[:200]}")
+            
+            # The tool might return a string with the token, or a dict
+            # If it's a string, it might be JSON or just the token
+            if isinstance(output, str):
+                # Check if it contains emojis (error message)
+                if "❌" in output or "✅" in output or "⚠️" in output:
+                    # Try to extract the actual token from the message
+                    # Look for base64-like strings (long alphanumeric strings)
+                    import re
+                    base64_pattern = r'[A-Za-z0-9+/=]{50,}'  # Base64 tokens are usually long
+                    matches = re.findall(base64_pattern, output)
+                    if matches:
+                        # Use the longest match (likely the token)
+                        token = max(matches, key=len)
+                        print(f"🔑 [NEOFS] Extracted token from message (length: {len(token)})")
+                        return {"bearer_token": token}
+                    else:
+                        print(f"❌ [NEOFS] Tool returned error message with no token: {output[:200]}")
+                        raise ValueError(f"Bearer token creation failed: {output}")
+                
+                # Check if it's JSON
+                try:
+                    import json
+                    parsed = json.loads(output)
+                    if isinstance(parsed, dict):
+                        output = parsed
+                        print(f"🔑 [NEOFS] Parsed JSON result: {list(parsed.keys())}")
+                except:
+                    # Not JSON, assume it's the token itself
+                    print(f"🔑 [NEOFS] Tool returned string token (length: {len(output)})")
+            
+            # Extract bearer token from dict if needed
+            if isinstance(output, dict):
+                bearer_token_value = output.get("bearer_token") or output.get("token") or output.get("value")
+                if bearer_token_value:
+                    print(f"🔑 [NEOFS] Extracted bearer token from dict (length: {len(bearer_token_value)})")
+                    return {"bearer_token": bearer_token_value, **output}
+                else:
+                    print(f"⚠️ [NEOFS] Dict result but no bearer_token key: {list(output.keys())}")
+            
+            print(f"🔑 [NEOFS] Bearer token created successfully")
+            return output
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ [NEOFS] Error creating bearer token: {error_msg}")
+            if "ASCII" in error_msg or "ascii" in error_msg.lower():
+                print(f"   ⚠️  ASCII error in bearer token creation!")
+                print(f"   This suggests NEOFS_OWNER_ADDRESS or NEOFS_PRIVATE_KEY_WIF has encoding issues")
+                print(f"   Owner address: {self.owner_address[:20] if self.owner_address else 'NOT SET'}...")
+                print(f"   Private key set: {'YES' if self.private_key_wif else 'NO'}")
+                print(f"   Environment Owner: {os.getenv('NEOFS_OWNER_ADDRESS', 'NOT SET')[:20]}...")
+                print(f"   Environment Key: {'SET' if os.getenv('NEOFS_PRIVATE_KEY_WIF') else 'NOT SET'}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def create_container(
         self,
@@ -152,18 +319,106 @@ class NeoFSClient:
         """
         # Create bearer token if not provided
         if not bearer_token:
-            token_result = await self.create_bearer_token(
-                token_type="container",
-                verb="PUT"
-            )
-            # Extract token from result
-            if isinstance(token_result, dict):
-                bearer_token = token_result.get("bearer_token") or token_result.get("token")
-            elif isinstance(token_result, str):
-                bearer_token = token_result
+            print(f"🔑 [NEOFS] Creating container bearer token...")
+            try:
+                token_result = await self.create_bearer_token(
+                    token_type="container",
+                    verb="PUT"
+                )
+                # Extract token from result
+                print(f"🔑 [NEOFS] Token result type: {type(token_result)}")
+                print(f"🔑 [NEOFS] Token result preview: {str(token_result)[:200]}")
+                
+                if isinstance(token_result, dict):
+                    bearer_token = token_result.get("bearer_token") or token_result.get("token") or token_result.get("value")
+                    print(f"🔑 [NEOFS] Extracted from dict: {list(token_result.keys())}")
+                elif isinstance(token_result, str):
+                    # Check if it contains emojis (error message with formatted output)
+                    if "❌" in token_result or "✅" in token_result or "⚠️" in token_result:
+                        # Try to extract the actual token from the message
+                        # Look for base64-like strings (long alphanumeric strings)
+                        import re
+                        base64_pattern = r'[A-Za-z0-9+/=]{50,}'  # Base64 tokens are usually long
+                        matches = re.findall(base64_pattern, token_result)
+                        if matches:
+                            # Use the longest match (likely the token)
+                            bearer_token = max(matches, key=len)
+                            print(f"🔑 [NEOFS] Extracted token from formatted message (length: {len(bearer_token)})")
+                        else:
+                            print(f"❌ [NEOFS] Tool returned error message with no extractable token!")
+                            raise ValueError(f"Bearer token creation failed: {token_result[:200]}")
+                    # Check if it's JSON string
+                    elif token_result.strip().startswith('{'):
+                        try:
+                            import json
+                            parsed = json.loads(token_result)
+                            if isinstance(parsed, dict):
+                                bearer_token = parsed.get("bearer_token") or parsed.get("token") or parsed.get("value")
+                                print(f"🔑 [NEOFS] Parsed JSON string, extracted token")
+                            else:
+                                bearer_token = token_result
+                        except:
+                            bearer_token = token_result
+                    else:
+                        # Assume it's the token itself
+                        bearer_token = token_result
+                else:
+                    print(f"⚠️ [NEOFS] Unexpected bearer token result type: {type(token_result)}")
+                    bearer_token = str(token_result) if token_result else None
+                
+                # Validate bearer token is actually a token (base64-like, no emojis)
+                if bearer_token:
+                    # Bearer tokens are typically base64, should be ASCII
+                    # Remove any remaining emojis or non-ASCII if somehow they got through
+                    import re
+                    # Keep only ASCII alphanumeric and base64 characters
+                    bearer_token_clean = re.sub(r'[^A-Za-z0-9+/=]', '', bearer_token)
+                    
+                    if len(bearer_token_clean) < 50:
+                        print(f"❌ [NEOFS] Bearer token too short after cleaning: {len(bearer_token_clean)}")
+                        raise ValueError(f"Bearer token appears invalid: {bearer_token[:100]}")
+                    
+                    bearer_token = bearer_token_clean
+                    print(f"✅ [NEOFS] Bearer token obtained (length: {len(bearer_token)}, cleaned and ASCII-valid)")
+                else:
+                    raise ValueError("Bearer token creation returned empty result")
+            except Exception as e:
+                print(f"❌ [NEOFS] Failed to create bearer token: {e}")
+                raise
+        
+        # Ensure container name is ASCII-only
+        if not name.encode('ascii', errors='ignore').decode('ascii') == name:
+            raise ValueError(f"Container name '{name}' contains non-ASCII characters")
+        
+        # Ensure all attribute values are ASCII-only strings
+        if attributes:
+            cleaned_attributes = {}
+            for key, value in attributes.items():
+                if not isinstance(value, str):
+                    value = str(value)
+                # Remove non-ASCII characters or encode them
+                cleaned_value = value.encode('ascii', errors='ignore').decode('ascii')
+                cleaned_attributes[key] = cleaned_value
+            attributes = cleaned_attributes
+        
+        # Validate all parameters are ASCII before passing to tool
+        print(f"📦 [NEOFS] Preparing container creation parameters...")
+        print(f"   Container name: {name} (ASCII: {name.encode('ascii', errors='replace').decode('ascii') == name})")
+        print(f"   Bearer token: {'SET' if bearer_token else 'NOT SET'} (length: {len(bearer_token) if bearer_token else 0})")
+        if bearer_token:
+            # Clean bearer token - remove any non-base64 characters
+            import re
+            bearer_token_clean = re.sub(r'[^A-Za-z0-9+/=]', '', bearer_token)
+            
+            if len(bearer_token_clean) < 50:
+                print(f"   Bearer token too short after cleaning: {len(bearer_token_clean)}")
+                raise ValueError(f"Bearer token appears invalid: {bearer_token[:100]}")
+            
+            bearer_token = bearer_token_clean
+            print(f"   Bearer token cleaned and validated (length: {len(bearer_token)})")
         
         params = {
-            "name": name,
+            "container_name": name,  # CreateContainerTool expects 'container_name', not 'name'
             "bearer_token": bearer_token,
             "basic_acl": basic_acl,
             "placement_policy": placement_policy
@@ -171,9 +426,35 @@ class NeoFSClient:
         
         if attributes:
             params["attributes_json"] = json.dumps(attributes)
+            print(f"   Attributes JSON: {params['attributes_json'][:100]}...")
         
-        result = await self.create_container_tool.execute(**params)
-        return result.output if hasattr(result, 'output') else result
+        print(f"📦 [NEOFS] Calling create_container_tool.execute()...")
+        try:
+            result = await self.create_container_tool.execute(**params)
+            output = result.output if hasattr(result, 'output') else result
+            print(f"✅ [NEOFS] Container creation tool executed successfully")
+            return output
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ [NEOFS] Container creation failed: {error_msg}")
+            if "ASCII" in error_msg or "ascii" in error_msg.lower():
+                print(f"   ⚠️  ASCII encoding error detected!")
+                print(f"   Error details: {error_msg}")
+                print(f"   Container name: {name}")
+                print(f"   Container name (ASCII check): {name.encode('ascii', errors='replace').decode('ascii')}")
+                print(f"   Bearer token (first 100 chars): {bearer_token[:100] if bearer_token else 'NONE'}...")
+                if bearer_token:
+                    try:
+                        bearer_token.encode('ascii')
+                        print(f"   Bearer token ASCII: ✅ Valid")
+                    except UnicodeEncodeError as ascii_err:
+                        print(f"   Bearer token ASCII: ❌ Invalid - {ascii_err}")
+                print(f"   Attributes: {attributes}")
+                print(f"   Owner address: {self.owner_address[:30] if self.owner_address else 'NOT SET'}...")
+                print(f"   Private key set: {'YES' if self.private_key_wif else 'NO'}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def list_containers(self) -> List[Dict[str, Any]]:
         """List all containers for the authenticated wallet"""

@@ -7,7 +7,8 @@
  */
 
 // import { rpc } from "viem/utils";
-import { RpcClient } from "neo-mamba";
+import { rpc } from "@cityofzion/neon-js";
+import { wallet } from "@cityofzion/neon-core";
 
 // Type definitions based on NeoLine dAPI documentation
 interface NeoLineProvider {
@@ -118,7 +119,6 @@ class NeoLineN3 {
     return new Promise((resolve, reject) => {
       if (window.NEOLineN3) {
         try {
-          // const client = new RpcClient("https://testnet1.neo.coz.io:443")
           // Init() is a class constructor, must be called with 'new'
           this.provider = new window.NEOLineN3.Init();
           console.log("RPC", this.provider);
@@ -388,8 +388,7 @@ export function waitForNeoLine(): Promise<void> {
 
 // Contract addresses
 export const GAS_CONTRACT_HASH = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
-export const PREDICTX_CONTRACT_HASH =
-  "0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a";
+export const NORO_CONTRACT_HASH = "0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a";
 
 // Witness scope constants (from Neo N3)
 export const WITNESS_SCOPE = {
@@ -412,7 +411,8 @@ export async function buyYes(
   const neoline = await getNeoLine();
   const account = await neoline.getAccount();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
+  const client = new rpc.RPCClient("https://testnet1.neo.coz.io:443");
 
   console.log("Calling buyYes with:", {
     contractHash,
@@ -421,15 +421,26 @@ export async function buyYes(
     accountAddress: account.address,
   });
 
-  // Match the example pattern exactly:
-  // - Use CustomContracts scope (16)
-  // - Include both PredictX and GAS contracts in allowedContracts
-  // - Include allowedGroups: []
-  // - Use lower fee (0.0001)
-  // - Use broadcastOverride: false
-  // Note: In the example, account is script hash (hex without 0x)
-  // NeoLine getAccount() returns Base58 address, but signers might accept both
-  const accountForSigner = account.address.replace(/^0x/, ""); // Remove 0x if present
+  // Convert Base58 address to script hash (hex string) for write functions
+  // NeoLine getAccount() returns Base58 address (e.g., "NZUugGMmmmdY")
+  // But signers need script hash (hex string, e.g., "2cab903ff032ac693f8514581665be534beac39f")
+  let accountForSigner: string;
+
+  if (account.address.startsWith("N")) {
+    // Base58 address - convert to script hash (hex string without 0x)
+    try {
+      accountForSigner = wallet.getScriptHashFromAddress(account.address);
+      // Remove 0x prefix if present (NeoLine expects hex string without 0x)
+      accountForSigner = accountForSigner.replace(/^0x/, "");
+      console.log("Converted Base58 to script hash:", accountForSigner);
+    } catch (error) {
+      console.error("Failed to convert address to script hash:", error);
+      throw new Error("Failed to convert address to script hash");
+    }
+  } else {
+    // Already a script hash (hex string)
+    accountForSigner = account.address.replace(/^0x/, ""); // Remove 0x if present
+  }
 
   try {
     const invokeParams = {
@@ -444,11 +455,7 @@ export async function buyYes(
       signers: [
         {
           account: accountForSigner,
-          scopes: WITNESS_SCOPE.CustomContracts, // 16
-          allowedContracts: [
-            accountForSigner, // GAS contract (with 0x)
-          ],
-          allowedGroups: [],
+          scopes: WITNESS_SCOPE.Global, // 128 - Global scope
         },
       ],
     };
@@ -470,9 +477,7 @@ export async function buyYes(
         signers: [
           {
             account: accountForSigner,
-            scopes: WITNESS_SCOPE.CustomContracts,
-            allowedContracts: [contractHash, GAS_CONTRACT_HASH],
-            allowedGroups: [],
+            scopes: WITNESS_SCOPE.Global, // 128 - Global scope
           },
         ],
       }
@@ -503,10 +508,28 @@ export async function buyNo(
   const neoline = await getNeoLine();
   const account = await neoline.getAccount();
 
-  // Keep 0x prefix - NeoLine might need it
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   console.log("Calling buyNo with:", { contractHash, marketId, amount });
+
+  // Convert Base58 address to script hash (hex string) for write functions
+  let accountForSigner: string;
+
+  if (account.address.startsWith("N")) {
+    // Base58 address - convert to script hash (hex string without 0x)
+    try {
+      accountForSigner = wallet.getScriptHashFromAddress(account.address);
+      // Remove 0x prefix if present (NeoLine expects hex string without 0x)
+      accountForSigner = accountForSigner.replace(/^0x/, "");
+      console.log("Converted Base58 to script hash:", accountForSigner);
+    } catch (error) {
+      console.error("Failed to convert address to script hash:", error);
+      throw new Error("Failed to convert address to script hash");
+    }
+  } else {
+    // Already a script hash (hex string)
+    accountForSigner = account.address.replace(/^0x/, ""); // Remove 0x if present
+  }
 
   // Try with CalledByEntry first (most compatible)
   // NeoLine should show popup for this
@@ -522,8 +545,8 @@ export async function buyNo(
         fee: "0.01",
         signers: [
           {
-            account: account.address,
-            scopes: WITNESS_SCOPE.CalledByEntry,
+            account: accountForSigner, // Use script hash, not Base58
+            scopes: WITNESS_SCOPE.Global, // 128 - Global scope
           },
         ],
       }
@@ -552,13 +575,8 @@ export async function createMarket(
   resolveDate: string, // Unix timestamp in milliseconds as string
   oracleUrl: string
 ): Promise<InvokeResult> {
-  const neoline = await getNeoLine();
-  const account = await neoline.getAccount();
-
-  const contractHash = PREDICTX_CONTRACT_HASH;
-
-  console.log("Calling createMarket with:", {
-    contractHash,
+  console.log("createMarket: Starting...");
+  console.log("createMarket: Parameters:", {
     question,
     description,
     category,
@@ -567,6 +585,72 @@ export async function createMarket(
   });
 
   try {
+    // Check if NeoLine is available first
+    if (!isNeoLineAvailable()) {
+      throw new Error(
+        "NeoLine wallet extension is not installed or not available. Please install NeoLine wallet extension."
+      );
+    }
+    console.log("✅ NeoLine is available");
+
+    console.log("createMarket: Getting NeoLine instance...");
+    const neoline = await getNeoLine();
+    console.log("createMarket: NeoLine instance obtained");
+
+    // Verify provider is initialized
+    if (!neoline || !(neoline as any).provider) {
+      throw new Error(
+        "NeoLine provider is not initialized. Please refresh the page and try again."
+      );
+    }
+    console.log("✅ NeoLine provider is initialized");
+
+    console.log(
+      "createMarket: Getting account (this should trigger wallet popup if not connected)..."
+    );
+    const account = await neoline.getAccount();
+    console.log("createMarket: Account obtained:", account);
+
+    if (!account || !account.address) {
+      throw new Error(
+        "Failed to get account from NeoLine. Please make sure your wallet is connected."
+      );
+    }
+    console.log("✅ Account retrieved successfully:", account.address);
+
+    const contractHash = NORO_CONTRACT_HASH;
+
+    console.log("Calling createMarket with:", {
+      contractHash,
+      question,
+      description,
+      category,
+      resolveDate,
+      oracleUrl,
+    });
+
+    // Convert Base58 address to script hash (hex string) for write functions
+    let accountForSigner: string;
+
+    if (account.address.startsWith("N")) {
+      // Base58 address - convert to script hash (hex string without 0x)
+      try {
+        accountForSigner = wallet.getScriptHashFromAddress(account.address);
+        // Remove 0x prefix if present (NeoLine expects hex string without 0x)
+        accountForSigner = accountForSigner.replace(/^0x/, "");
+        console.log("Converted Base58 to script hash:", accountForSigner);
+      } catch (error) {
+        console.error("Failed to convert address to script hash:", error);
+        throw new Error("Failed to convert address to script hash");
+      }
+    } else {
+      // Already a script hash (hex string)
+      accountForSigner = account.address.replace(/^0x/, ""); // Remove 0x if present
+    }
+
+    console.log(
+      "createMarket: Invoking contract (this should trigger transaction confirmation popup)..."
+    );
     const result = await neoline.invoke(
       contractHash,
       "createMarket",
@@ -581,8 +665,8 @@ export async function createMarket(
         fee: "0.01",
         signers: [
           {
-            account: account.address,
-            scopes: WITNESS_SCOPE.CalledByEntry,
+            account: accountForSigner, // Use script hash, not Base58
+            scopes: WITNESS_SCOPE.Global, // 128 - Global scope
           },
         ],
       }
@@ -591,6 +675,12 @@ export async function createMarket(
     return result;
   } catch (error: any) {
     console.error("createMarket error:", error);
+    console.error("createMarket error details:", {
+      message: error?.message,
+      code: error?.code,
+      type: error?.type,
+      stack: error?.stack,
+    });
     throw error;
   }
 }
@@ -602,7 +692,7 @@ export async function createMarket(
 export async function getMarket(marketId: string): Promise<any> {
   const neoline = await getNeoLine();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "getMarket", [
@@ -613,32 +703,46 @@ export async function getMarket(marketId: string): Promise<any> {
     if (result.stack && result.stack.length > 0) {
       const marketData = result.stack[0].value;
 
+      // Helper to extract value from {type, value} structure
+      const extractValue = (item: any): any => {
+        if (item === null || item === undefined) return null;
+        if (typeof item === "object" && "value" in item) {
+          return item.value;
+        }
+        return item;
+      };
+
       // NeoLine might return struct as object or array
       // Handle both cases
       if (Array.isArray(marketData)) {
-        // If it's an array, return as-is
-        return marketData;
+        // If it's an array, extract values from each item if needed
+        return marketData.map(extractValue);
       } else if (typeof marketData === "object" && marketData !== null) {
         // If it's an object, convert to array format for consistency
-        // MarketData struct order: Id, Question, Description, Category, ResolveDate, OracleUrl, Creator, CreatedAt, Resolved, Outcome, YesShares, NoShares
+        // MarketData struct order: Question, Description, Category, ResolveDate, OracleUrl, Creator, CreatedAt, Resolved, Outcome, YesShares, NoShares
+        const extract = (
+          key: string,
+          altKey: string,
+          index: number,
+          defaultValue: any = ""
+        ) => {
+          const val =
+            marketData[key] || marketData[altKey] || marketData[index];
+          return extractValue(val) ?? defaultValue;
+        };
+
         return [
-          marketData.Question || marketData.question || marketData[0] || "",
-          marketData.Description ||
-            marketData.description ||
-            marketData[1] ||
-            "",
-          marketData.Category || marketData.category || marketData[2] || "",
-          marketData.ResolveDate ||
-            marketData.resolveDate ||
-            marketData[3] ||
-            "0",
-          marketData.OracleUrl || marketData.oracleUrl || marketData[4] || "",
-          marketData.Creator || marketData.creator || marketData[5] || "",
-          marketData.CreatedAt || marketData.createdAt || marketData[6] || "0",
-          marketData.Resolved || marketData.resolved || marketData[7] || false,
-          marketData.Outcome || marketData.outcome || marketData[8] || false,
-          marketData.YesShares || marketData.yesShares || marketData[9] || "0",
-          marketData.NoShares || marketData.noShares || marketData[10] || "0",
+          extract("Question", "question", 0, ""),
+          extract("Description", "description", 1, ""),
+          extract("Category", "category", 2, ""),
+          extract("ResolveDate", "resolveDate", 3, "0"),
+          extract("OracleUrl", "oracleUrl", 4, ""),
+          extract("Creator", "creator", 5, ""),
+          extract("CreatedAt", "createdAt", 6, "0"),
+          extract("Resolved", "resolved", 7, false),
+          extract("Outcome", "outcome", 8, false),
+          extract("YesShares", "yesShares", 9, "0"),
+          extract("NoShares", "noShares", 10, "0"),
         ];
       }
       return marketData;
@@ -656,20 +760,166 @@ export async function getMarket(marketId: string): Promise<any> {
 export async function getMarketCount(): Promise<number> {
   const neoline = await getNeoLine();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
+    console.log("🔍 [FRONTEND] Getting market count from contract...");
     const result = await neoline.invokeRead(contractHash, "getMarketCount", []);
+    console.log("📊 [FRONTEND] Market count result:", result);
 
     if (result.stack && result.stack.length > 0) {
       const count = result.stack[0].value;
-      return parseInt(count, 10);
+      const parsedCount = parseInt(count, 10);
+      console.log(`✅ [FRONTEND] Market count: ${parsedCount}`);
+      return parsedCount;
     }
+    console.log("⚠️ [FRONTEND] No stack in market count result");
     return 0;
   } catch (error: any) {
-    console.error("getMarketCount error:", error);
+    console.error("❌ [FRONTEND] getMarketCount error:", error);
     return 0;
   }
+}
+
+/**
+ * Fetch all markets directly from contract (read-only)
+ * This bypasses the backend and reads directly from the blockchain
+ */
+export async function fetchAllMarketsFromContract(): Promise<Market[]> {
+  try {
+    console.log("🔍 [FRONTEND] Fetching all markets from contract...");
+
+    // Get market count first
+    const marketCount = await getMarketCount();
+    console.log(`📊 [FRONTEND] Found ${marketCount} markets in contract`);
+
+    if (marketCount === 0) {
+      console.log("⚠️ [FRONTEND] No markets found in contract");
+      return [];
+    }
+
+    const neoline = await getNeoLine();
+    const contractHash = NORO_CONTRACT_HASH;
+    const markets: Market[] = [];
+
+    // Fetch each market (markets are 1-indexed)
+    for (let i = 1; i <= marketCount; i++) {
+      try {
+        console.log(`🔍 [FRONTEND] Fetching market ${i}/${marketCount}...`);
+        const marketData = await getMarket(String(i));
+
+        if (
+          marketData &&
+          Array.isArray(marketData) &&
+          marketData.length >= 11
+        ) {
+          // Helper function to extract value from {type, value} structure
+          const extractValue = (item: any): any => {
+            if (item === null || item === undefined) return "";
+            if (typeof item === "object" && "value" in item) {
+              return item.value;
+            }
+            return item;
+          };
+
+          // Parse market data array
+          // MarketData struct: [Question, Description, Category, ResolveDate, OracleUrl, Creator, CreatedAt, Resolved, Outcome, YesShares, NoShares]
+          // Each item might be wrapped in {type, value} structure
+          const question = String(extractValue(marketData[0]) || "");
+          const description = String(extractValue(marketData[1]) || "");
+          const category = String(extractValue(marketData[2]) || "Others");
+          const resolveDate = String(extractValue(marketData[3]) || "0");
+          const oracleUrl = String(extractValue(marketData[4]) || "");
+          const creator = String(extractValue(marketData[5]) || "");
+          const createdAt = String(extractValue(marketData[6]) || "0");
+          const resolved = Boolean(extractValue(marketData[7]) || false);
+          const outcome = extractValue(marketData[8]);
+          const yesShares = parseInt(
+            String(extractValue(marketData[9]) || "0"),
+            10
+          );
+          const noShares = parseInt(
+            String(extractValue(marketData[10]) || "0"),
+            10
+          );
+
+          // Calculate probability (yesShares / (yesShares + noShares) * 100)
+          const totalShares = yesShares + noShares;
+          const probability =
+            totalShares > 0 ? Math.round((yesShares / totalShares) * 100) : 50;
+
+          // Format volume
+          const volume = formatVolume(yesShares, noShares);
+
+          const market: Market = {
+            id: String(i),
+            question: question,
+            description: description,
+            category: category,
+            resolveDate: resolveDate,
+            probability: probability,
+            volume: volume,
+            isResolved: Boolean(resolved),
+            outcome:
+              outcome === true ? "Yes" : outcome === false ? "No" : undefined,
+            creator: creator,
+            created_at: createdAt,
+            oracle_url: oracleUrl,
+            yes_shares: yesShares,
+            no_shares: noShares,
+          };
+
+          markets.push(market);
+          const questionPreview =
+            question && typeof question === "string"
+              ? question.substring(0, 50)
+              : String(question || "").substring(0, 50);
+          console.log(`✅ [FRONTEND] Market ${i}: ${questionPreview}...`);
+        } else {
+          console.log(`⚠️ [FRONTEND] Market ${i} returned invalid data`);
+        }
+      } catch (error: any) {
+        console.error(`❌ [FRONTEND] Error fetching market ${i}:`, error);
+        // Continue to next market
+        continue;
+      }
+    }
+
+    console.log(
+      `✅ [FRONTEND] Successfully fetched ${markets.length} markets from contract`
+    );
+    return markets;
+  } catch (error: any) {
+    console.error("❌ [FRONTEND] Error fetching all markets:", error);
+    throw error;
+  }
+}
+
+// Helper function to format volume
+function formatVolume(yesShares: number, noShares: number): string {
+  const total = yesShares + noShares;
+  if (total === 0) return "0";
+  if (total < 1000) return total.toString();
+  if (total < 1000000) return `${(total / 1000).toFixed(1)}K`;
+  return `${(total / 1000000).toFixed(1)}M`;
+}
+
+// Market interface for frontend
+export interface Market {
+  id: string;
+  question: string;
+  description?: string;
+  category: string;
+  resolveDate: string;
+  probability: number;
+  volume: string;
+  isResolved: boolean;
+  outcome?: "Yes" | "No";
+  creator?: string;
+  created_at?: string;
+  oracle_url?: string;
+  yes_shares?: number;
+  no_shares?: number;
 }
 
 /**
@@ -680,7 +930,7 @@ export async function getMarketCount(): Promise<number> {
 export async function getProbability(marketId: string): Promise<number> {
   const neoline = await getNeoLine();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "getProbability", [
@@ -709,7 +959,7 @@ export async function getUserYesShares(
 ): Promise<number> {
   const neoline = await getNeoLine();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "getUserYesShares", [
@@ -739,7 +989,7 @@ export async function getUserNoShares(
 ): Promise<number> {
   const neoline = await getNeoLine();
 
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "getUserNoShares", [
@@ -767,7 +1017,7 @@ export async function getUserNoShares(
  */
 export async function testSimple(): Promise<string> {
   const neoline = await getNeoLine();
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "testSimple", []);
@@ -786,7 +1036,7 @@ export async function testSimple(): Promise<string> {
  */
 export async function testContractState(): Promise<string> {
   const neoline = await getNeoLine();
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(
@@ -812,7 +1062,7 @@ export async function testBuyYes(
   amount: string
 ): Promise<string> {
   const neoline = await getNeoLine();
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "testBuyYes", [
@@ -836,7 +1086,7 @@ export async function testBuyYes(
 export async function testGasTransfer(amount: string): Promise<InvokeResult> {
   const neoline = await getNeoLine();
   const account = await neoline.getAccount();
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   console.log("Calling testGasTransfer with:", {
     contractHash,
@@ -1009,7 +1259,7 @@ export async function testGasTransfer(amount: string): Promise<InvokeResult> {
  */
 export async function testStorage(marketId: string): Promise<string> {
   const neoline = await getNeoLine();
-  const contractHash = PREDICTX_CONTRACT_HASH;
+  const contractHash = NORO_CONTRACT_HASH;
 
   try {
     const result = await neoline.invokeRead(contractHash, "testStorage", [

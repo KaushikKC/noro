@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PredictX | Scientific Prediction Markets",
+  title: "noro | Scientific Prediction Markets",
   description:
     "Decentralized scientific prediction markets powered by SpoonOS agents on Neo N3.",
 };
