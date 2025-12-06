@@ -6,7 +6,7 @@ export PATH="/usr/local/share/dotnet:$HOME/.dotnet/tools:$PATH"
 # Navigate to contracts directory
 cd "$(dirname "$0")"
 
-echo "Building PredictXMarket contract..."
+echo "Building NoroMarket contract..."
 echo "Using dotnet: $(which dotnet)"
 echo "Dotnet version: $(dotnet --version)"
 

@@ -1,5 +1,5 @@
 """
-Tools package for PredictX agents
+Tools package for noro agents
 """
 from .pubmed_tool import PubMedTool
 from .arxiv_tool import ArxivTool

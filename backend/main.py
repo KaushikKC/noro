@@ -1195,6 +1195,49 @@ async def oracle_callback(request_data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/markets/{market_id}/resolve/demo")
+async def demo_resolve_market(market_id: str, request: Request):
+    """
+    DEMO ONLY: Manually resolve a market for demonstration purposes
+    This updates the database to show the market as resolved
+    In production, markets are resolved via Oracle callbacks
+    
+    Body: { "outcome": "yes" | "no" }
+    """
+    try:
+        body = await request.json()
+        outcome = body.get("outcome", "").lower()
+        
+        # Validate outcome
+        if outcome not in ["yes", "no"]:
+            raise HTTPException(status_code=400, detail="Outcome must be 'yes' or 'no'")
+        
+        # Get market from database
+        market = get_market_from_db(market_id)
+        if not market:
+            raise HTTPException(status_code=404, detail=f"Market {market_id} not found")
+        
+        # Update market in database
+        update_market_onchain_data(market_id, {
+            "is_resolved": True,
+            "outcome": outcome == "yes",
+            "status": "resolved"
+        })
+        
+        print(f"✅ [DEMO RESOLVE] Market {market_id} resolved as: {outcome.upper()}")
+        
+        return {
+            "success": True,
+            "market_id": market_id,
+            "outcome": outcome,
+            "message": f"Market {market_id} resolved as {outcome.upper()} (DEMO MODE)"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [DEMO RESOLVE] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # NeoFS endpoints
 @app.post("/neofs/containers/create")
 async def create_neofs_container(name: str):

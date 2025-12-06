@@ -15,7 +15,13 @@ import { Info, Link as LinkIcon, Loader2 } from "lucide-react";
 import {
   createMarket as createMarketContract,
   isNeoLineAvailable,
+  getMarketCount,
 } from "@/lib/neoline";
+import {
+  verifyMarketInNeoFS,
+  getNeoFSStatus,
+  storeMarketInNeoFS,
+} from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 export default function CreateMarketPage() {
@@ -125,12 +131,97 @@ export default function CreateMarketPage() {
 
       if (invokeResult.txid) {
         setSuccess(
-          `Market created! Transaction: ${invokeResult.txid}. Market data stored in NeoFS.`
+          `Market created! Transaction: ${invokeResult.txid}. Checking NeoFS storage...`
         );
-        // Redirect to markets page after 2 seconds
+
+        // Wait a bit for backend to process and store in NeoFS
+        console.log("⏳ Waiting for backend to store market in NeoFS...");
+
+        // Poll for market count to determine market_id, then store and verify NeoFS
+        const checkNeoFS = async () => {
+          try {
+            // Wait for transaction to be confirmed on-chain first
+            console.log("⏳ Waiting 5 seconds for transaction confirmation...");
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+
+            // Get current market count to determine the new market ID
+            const marketCount = await getMarketCount();
+            const newMarketId = marketCount.toString();
+
+            console.log(`🔍 Market created! Market ID: ${newMarketId}`);
+            console.log(`📦 Storing market ${newMarketId} in NeoFS...`);
+
+            // Manually trigger storage in NeoFS (since we created via contract directly)
+            const storeResult = await storeMarketInNeoFS(newMarketId, {
+              question: formData.question,
+              description: formData.description,
+              category: formData.category,
+              resolveDate: resolveDate,
+              oracleUrl: formData.oracle,
+            });
+
+            if (storeResult.success) {
+              console.log(`✅ Market ${newMarketId} stored in NeoFS!`);
+            } else {
+              console.warn(
+                `⚠️ Failed to store in NeoFS: ${storeResult.reason}`
+              );
+            }
+
+            // Wait a bit more, then verify
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            // Verify NeoFS storage
+            const verification = await verifyMarketInNeoFS(newMarketId);
+
+            if (verification.in_neofs) {
+              console.log(`✅ Market ${newMarketId} is stored in NeoFS!`);
+              setSuccess(
+                `✅ Market created and stored in NeoFS!\n` +
+                  `Transaction: ${invokeResult.txid}\n` +
+                  `Market ID: ${newMarketId}\n` +
+                  `NeoFS Container: ${verification.container_id}\n` +
+                  `Question: ${
+                    verification.market_data?.question || formData.question
+                  }`
+              );
+            } else {
+              console.log(
+                `⚠️ Market ${newMarketId} not yet in NeoFS: ${verification.reason}`
+              );
+              setSuccess(
+                `Market created! Transaction: ${invokeResult.txid}\n` +
+                  `Market ID: ${newMarketId}\n` +
+                  `⚠️ NeoFS storage: ${
+                    verification.reason || "Still processing..."
+                  }\n` +
+                  `The backend is storing market data in NeoFS. This may take a few seconds.`
+              );
+            }
+
+            // Also get overall NeoFS status
+            const neofsStatus = await getNeoFSStatus();
+            if (neofsStatus.available) {
+              console.log(
+                `📦 NeoFS Status: ${neofsStatus.markets_count} markets stored`
+              );
+            }
+          } catch (err) {
+            console.error("Error checking NeoFS:", err);
+            setSuccess(
+              `Market created! Transaction: ${invokeResult.txid}\n` +
+                `Note: Could not verify NeoFS storage. Check backend logs.`
+            );
+          }
+        };
+
+        // Start checking NeoFS in background
+        checkNeoFS();
+
+        // Redirect to markets page after 5 seconds
         setTimeout(() => {
           router.push("/markets");
-        }, 2000);
+        }, 5000);
       } else {
         setSuccess(
           "Market transaction prepared. Please confirm in NeoLine wallet."

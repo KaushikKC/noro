@@ -21,6 +21,8 @@ import {
   analyzeMarket,
   analyzeMarketTest,
   getTradeProposal,
+  fetchMarket,
+  demoResolveMarket,
   type AgentAnalysis,
   type TradeProposal,
 } from "@/lib/api";
@@ -51,6 +53,8 @@ export default function MarketDetailsPage() {
     outcome?: string;
     oracleUrl: string;
     agentProbability?: number;
+    neofsObjectId?: string;
+    neofsUrl?: string;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,9 +66,10 @@ export default function MarketDetailsPage() {
   );
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
 
   useEffect(() => {
-    const fetchMarket = async () => {
+    const loadMarket = async () => {
       if (!id) return;
 
       setIsLoading(true);
@@ -183,14 +188,86 @@ export default function MarketDetailsPage() {
           return;
         }
 
-        // Fetch directly from contract using NeoLine
+        // Fetch from database via backend API
         console.log(
-          `🔍 [MARKET DETAIL] Fetching market ${id} from contract...`
+          `🔍 [MARKET DETAIL] Fetching market ${id} from database...`
         );
-        const marketDataArray = await getMarket(id);
-        const probabilityValue = await getProbability(id);
 
-        if (
+        // Try fetching from backend API first (database)
+        let backendMarket: Awaited<ReturnType<typeof fetchMarket>> = null;
+        try {
+          console.log(
+            `🔍 [MARKET DETAIL] Calling fetchMarket(${id}, false)...`
+          );
+          backendMarket = await fetchMarket(id, false);
+          console.log(
+            `✅ [MARKET DETAIL] Fetched from database:`,
+            backendMarket
+              ? `Found market: ${backendMarket.question?.substring(0, 50)}`
+              : "null/undefined"
+          );
+        } catch (err) {
+          console.error(`❌ [MARKET DETAIL] Backend fetch error:`, err);
+          console.log(
+            `⚠️ [MARKET DETAIL] Backend fetch failed, trying contract...`
+          );
+        }
+
+        // Fallback to contract if backend fails
+        let marketDataArray: unknown = null;
+        let probabilityValue = 50;
+        if (!backendMarket) {
+          console.log(
+            `🔍 [MARKET DETAIL] Fetching from contract as fallback...`
+          );
+          marketDataArray = await getMarket(id);
+          probabilityValue = await getProbability(id);
+        }
+
+        // Use backend data if available
+        if (backendMarket) {
+          // Format dates
+          const resolveDateFormatted = backendMarket.resolveDate
+            ? new Date(backendMarket.resolveDate).toLocaleDateString()
+            : "Unknown";
+
+          const createdFormatted = backendMarket.created_at
+            ? new Date(backendMarket.created_at).toLocaleDateString()
+            : new Date().toLocaleDateString();
+
+          // Type assertion for NeoFS fields
+          const marketWithNeoFS = backendMarket as typeof backendMarket & {
+            neofs_object_id?: string;
+            neofs_url?: string;
+          };
+
+          setMarketData({
+            question: backendMarket.question || "",
+            description: backendMarket.description || "No description",
+            category: backendMarket.category || "Others",
+            creator: backendMarket.creator
+              ? backendMarket.creator.slice(0, 6) +
+                "..." +
+                backendMarket.creator.slice(-4)
+              : "Unknown",
+            created: createdFormatted,
+            resolveDate: resolveDateFormatted,
+            volume: backendMarket.volume || "0",
+            probability: backendMarket.probability || 50,
+            resolved: backendMarket.isResolved || false,
+            outcome:
+              backendMarket.outcome === true || backendMarket.outcome === "Yes"
+                ? "Yes"
+                : backendMarket.outcome === false ||
+                  backendMarket.outcome === "No"
+                ? "No"
+                : undefined,
+            oracleUrl: backendMarket.oracle_url || "",
+            neofsObjectId: marketWithNeoFS.neofs_object_id || undefined,
+            neofsUrl: marketWithNeoFS.neofs_url || undefined,
+          });
+          console.log(`✅ [MARKET DETAIL] Market ${id} loaded from database`);
+        } else if (
           marketDataArray &&
           Array.isArray(marketDataArray) &&
           marketDataArray.length >= 11
@@ -283,7 +360,7 @@ export default function MarketDetailsPage() {
       }
     };
 
-    fetchMarket();
+    loadMarket();
   }, [id]);
 
   // Fetch agent analysis and trade proposal
@@ -362,6 +439,64 @@ export default function MarketDetailsPage() {
     }
   };
 
+  const handleResolveMarket = async (outcome: "yes" | "no") => {
+    if (!id) return;
+
+    setIsResolving(true);
+    try {
+      const result = await demoResolveMarket(id, outcome);
+      console.log("✅ Market resolved:", result);
+
+      // Reload market data to show updated resolution status
+      const updatedMarket = await fetchMarket(id, false);
+      if (updatedMarket) {
+        const marketWithNeoFS = updatedMarket as typeof updatedMarket & {
+          neofs_object_id?: string;
+          neofs_url?: string;
+        };
+
+        setMarketData({
+          question: updatedMarket.question || "",
+          description: updatedMarket.description || "No description",
+          category: updatedMarket.category || "Others",
+          creator: updatedMarket.creator
+            ? updatedMarket.creator.slice(0, 6) +
+              "..." +
+              updatedMarket.creator.slice(-4)
+            : "Unknown",
+          created: updatedMarket.created_at
+            ? new Date(updatedMarket.created_at).toLocaleDateString()
+            : new Date().toLocaleDateString(),
+          resolveDate: updatedMarket.resolveDate
+            ? new Date(updatedMarket.resolveDate).toLocaleDateString()
+            : "Unknown",
+          volume: updatedMarket.volume || "0",
+          probability: updatedMarket.probability || 50,
+          resolved: updatedMarket.isResolved || false,
+          outcome:
+            updatedMarket.outcome === true || updatedMarket.outcome === "Yes"
+              ? "Yes"
+              : updatedMarket.outcome === false ||
+                updatedMarket.outcome === "No"
+              ? "No"
+              : undefined,
+          oracleUrl: updatedMarket.oracle_url || "",
+          neofsObjectId: marketWithNeoFS.neofs_object_id || undefined,
+          neofsUrl: marketWithNeoFS.neofs_url || undefined,
+        });
+      }
+    } catch (err) {
+      console.error("Error resolving market:", err);
+      alert(
+        `Failed to resolve market: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`
+      );
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -431,6 +566,22 @@ export default function MarketDetailsPage() {
                 </a>
               </div>
             )}
+            {marketData.neofsUrl && (
+              <div className="flex items-center gap-2 text-green-400">
+                <ExternalLink className="w-4 h-4" />
+                <a
+                  href={marketData.neofsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:underline"
+                  title={`NeoFS Object ID: ${
+                    marketData.neofsObjectId || "N/A"
+                  }`}
+                >
+                  View on NeoFS
+                </a>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
@@ -451,6 +602,34 @@ export default function MarketDetailsPage() {
               </>
             )}
           </Button>
+          {!marketData.resolved && (
+            <div className="flex gap-2">
+              <Button
+                onClick={() => handleResolveMarket("yes")}
+                disabled={isResolving}
+                variant="outline"
+                className="gap-2 bg-green-500/10 hover:bg-green-500/20 border-green-500/30 text-green-400"
+              >
+                {isResolving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  "✅ Resolve YES"
+                )}
+              </Button>
+              <Button
+                onClick={() => handleResolveMarket("no")}
+                disabled={isResolving}
+                variant="outline"
+                className="gap-2 bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-400"
+              >
+                {isResolving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  "❌ Resolve NO"
+                )}
+              </Button>
+            </div>
+          )}
           <Button variant="outline" size="icon">
             <Share2 className="w-4 h-4" />
           </Button>
@@ -626,6 +805,32 @@ export default function MarketDetailsPage() {
                       </a>
                     </li>
                   </ul>
+                </>
+              )}
+              {marketData.neofsObjectId && (
+                <>
+                  <h4 className="mt-4">NeoFS Storage</h4>
+                  <div className="space-y-2">
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Object ID: </span>
+                      <code className="bg-secondary/50 px-2 py-1 rounded text-xs font-mono">
+                        {marketData.neofsObjectId}
+                      </code>
+                    </div>
+                    {marketData.neofsUrl && (
+                      <div>
+                        <a
+                          href={marketData.neofsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-green-400 hover:underline flex items-center gap-2"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          Download from NeoFS
+                        </a>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>

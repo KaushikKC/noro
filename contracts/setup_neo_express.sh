@@ -30,12 +30,12 @@ fi
 echo ""
 
 # Create Neo Express instance if it doesn't exist
-if [ ! -f "predictx.neo-express.json" ]; then
+if [ ! -f "noro.neo-express.json" ]; then
     echo "📝 Creating Neo Express instance..."
-    neo-express create predictx
-    echo "✅ Neo Express instance created: predictx.neo-express.json"
+    neo-express create noro
+    echo "✅ Neo Express instance created: noro.neo-express.json"
 else
-    echo "✅ Neo Express instance already exists: predictx.neo-express.json"
+    echo "✅ Neo Express instance already exists: noro.neo-express.json"
 fi
 
 echo ""
@@ -44,7 +44,7 @@ echo "Setup Complete!"
 echo "=========================================="
 echo ""
 echo "To start the local blockchain:"
-echo "  neo-express run predictx"
+echo "  neo-express run noro"
 echo ""
 echo "To test the contract:"
 echo "  python3 test_contract_simple.py --rpc-url http://localhost:20332 --contract-hash <CONTRACT_HASH>"

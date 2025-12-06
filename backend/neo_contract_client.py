@@ -414,11 +414,24 @@ class NeoContractClient:
             return None
     
     def _parse_stack_value(self, value: Any) -> Any:
-        """Parse value from stack item"""
+        """Parse value from stack item, decoding base64 ByteString if needed"""
+        import base64
         if isinstance(value, dict):
-            if "value" in value:
-                return value["value"]
-            return value
+            value_type = value.get("type", "")
+            raw_value = value.get("value", "")
+            
+            # Decode base64 ByteString values
+            if value_type == "ByteString" and raw_value:
+                try:
+                    decoded = base64.b64decode(raw_value).decode('utf-8')
+                    # Remove quotes if present (JSON-encoded strings)
+                    if decoded.startswith('"') and decoded.endswith('"'):
+                        decoded = decoded[1:-1]
+                    return decoded
+                except:
+                    return raw_value
+            
+            return raw_value
         return value
     
     async def get_market_count(self) -> int:

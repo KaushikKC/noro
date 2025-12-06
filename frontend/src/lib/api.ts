@@ -41,7 +41,7 @@ export async function fetchMarkets(
   useNeoFS: boolean = true
 ): Promise<Market[]> {
   try {
-    const response = await fetch(`${API_BASE}/markets?use_neofs=${useNeoFS}`);
+    const response = await fetch(`${API_BASE}/markets`);
     if (!response.ok) {
       throw new Error(`Failed to fetch markets: ${response.statusText}`);
     }
@@ -109,20 +109,40 @@ export async function fetchMarket(
   useNeoFS: boolean = true
 ): Promise<Market | null> {
   try {
-    const response = await fetch(
-      `${API_BASE}/markets/${marketId}?use_neofs=${useNeoFS}`
+    const url = `${API_BASE}/markets/${marketId}?use_neofs=${useNeoFS}`;
+    console.log(`🔍 [API] Fetching market from: ${url}`);
+    const response = await fetch(url);
+    console.log(
+      `📡 [API] Response status: ${response.status} ${response.statusText}`
     );
+
     if (!response.ok) {
       if (response.status === 404) {
+        console.log(`⚠️ [API] Market ${marketId} not found (404)`);
         return null;
       }
+      const errorText = await response.text();
+      console.error(`❌ [API] Error response body:`, errorText);
       throw new Error(`Failed to fetch market: ${response.statusText}`);
     }
 
     const data = await response.json();
+    console.log(`📊 [API] Market ${marketId} response:`, {
+      success: data.success,
+      hasMarket: !!data.market,
+      marketKeys: data.market ? Object.keys(data.market) : [],
+      responseKeys: Object.keys(data),
+      fullResponse: data,
+    });
     if (data.success && data.market) {
       const m = data.market;
-      return {
+      console.log(`✅ [API] Parsing market data:`, {
+        id: m.id || m.market_id,
+        question: m.question?.substring(0, 50),
+        neofs_object_id: m.neofs_object_id,
+        neofs_url: m.neofs_url,
+      });
+      const result = {
         id: m.id || m.market_id || marketId,
         question: m.question || m.Question || "",
         description: m.description || m.Description || "",
@@ -150,8 +170,18 @@ export async function fetchMarket(
         creator: m.creator || m.Creator,
         created_at: m.created_at || m.createdAt || m.CreatedAt,
         oracle_url: m.oracle_url || m.oracleUrl || m.OracleUrl,
-      };
+        neofs_object_id: m.neofs_object_id || m.neofsObjectId,
+        neofs_url: m.neofs_url || m.neofsUrl,
+      } as any;
+      console.log(`✅ [API] Successfully parsed market ${marketId}`);
+      return result;
     }
+    console.log(`⚠️ [API] Market ${marketId} response missing data:`, {
+      success: data.success,
+      hasMarket: !!data.market,
+      responseKeys: Object.keys(data),
+      data,
+    });
     return null;
   } catch (error) {
     console.error("Error fetching market:", error);
@@ -556,6 +586,42 @@ export async function getNeoFSStatus(): Promise<NeoFSStatus> {
       available: false,
       error: err.message || "Unknown error",
     };
+  }
+}
+
+/**
+ * DEMO ONLY: Resolve a market for demonstration purposes
+ * In production, markets are resolved via Oracle callbacks
+ */
+export async function demoResolveMarket(
+  marketId: string,
+  outcome: "yes" | "no"
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/markets/${marketId}/resolve/demo`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ outcome }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to resolve market");
+    }
+
+    const data = await response.json();
+    return {
+      success: data.success,
+      message: data.message || `Market resolved as ${outcome.toUpperCase()}`,
+    };
+  } catch (error) {
+    console.error("Error resolving market:", error);
+    throw error;
   }
 }
 

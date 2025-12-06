@@ -38,7 +38,7 @@ DEBUG=True
 # Neo Blockchain Configuration
 NEO_RPC_URL=http://localhost:20332
 NEO_NETWORK=testnet
-NEO_CONTRACT_HASH=0x32a4a922a9385c066a13cf82e79dafe9b2151f2a
+NEO_CONTRACT_HASH=0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a
 
 # Database
 DATABASE_URL=sqlite:///./predictx.db

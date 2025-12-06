@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# PredictX Agents Setup Script
+# noro Agents Setup Script
 
-echo "🚀 Setting up PredictX SpoonOS Agents..."
+echo "🚀 Setting up noro SpoonOS Agents..."
 
 # Check if Python 3 is available
 if ! command -v python3 &> /dev/null; then

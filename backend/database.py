@@ -118,6 +118,8 @@ def insert_market(market_data: Dict[str, Any]) -> bool:
         return True
     except Exception as e:
         print(f"❌ Error inserting market: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_market(market_id: str) -> Optional[Dict[str, Any]]:
@@ -139,7 +141,9 @@ def get_market(market_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
         
         if row:
-            return dict(row)
+            if hasattr(row, 'keys'):  # SQLite Row object
+                return dict(row)
+            return row
         return None
     except Exception as e:
         print(f"❌ Error getting market: {e}")
@@ -170,7 +174,15 @@ def list_markets(status: str = "active", limit: int = 100) -> List[Dict[str, Any
         rows = cursor.fetchall()
         conn.close()
         
-        return [dict(row) for row in rows]
+        # Convert SQLite Row objects to dicts
+        markets = []
+        for row in rows:
+            if hasattr(row, 'keys'):  # SQLite Row object
+                markets.append(dict(row))
+            else:
+                markets.append(row)
+        
+        return markets
     except Exception as e:
         print(f"❌ Error listing markets: {e}")
         return []

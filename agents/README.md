@@ -1,6 +1,6 @@
-# PredictX SpoonOS Agents
+# noro SpoonOS Agents
 
-This directory contains the SpoonOS-based AI agents for PredictX prediction markets.
+This directory contains the SpoonOS-based AI agents for noro prediction markets.
 
 ## Architecture
 
@@ -72,10 +72,10 @@ python orchestrator.py
 
 ```python
 import asyncio
-from orchestrator import PredictXOrchestrator
+from orchestrator import NoroOrchestrator
 
 async def main():
-    orchestrator = PredictXOrchestrator(
+    orchestrator = NoroOrchestrator(
         llm_provider="openai",
         model_name="gpt-4o"
     )
@@ -93,7 +93,7 @@ asyncio.run(main())
 ### Batch Processing
 
 ```python
-orchestrator = PredictXOrchestrator()
+orchestrator = NoroOrchestrator()
 
 results = await orchestrator.batch_process([
     "Will AI achieve AGI by 2026?",
