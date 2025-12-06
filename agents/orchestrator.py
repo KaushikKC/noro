@@ -14,7 +14,7 @@ from judge_agent import JudgeAgent
 load_dotenv()
 
 
-class PredictXOrchestrator:
+class NoroOrchestrator:
     """
     Main orchestrator that coordinates the Analyzer and Trader agents
     """
@@ -194,7 +194,7 @@ class PredictXOrchestrator:
 # Example usage
 async def main():
     """Test the orchestrator"""
-    orchestrator = PredictXOrchestrator()  # Uses DEFAULT_LLM_PROVIDER from .env
+    orchestrator = NoroOrchestrator()  # Uses DEFAULT_LLM_PROVIDER from .env
     
     # Example market question
     market_question = "Will a new cancer treatment be approved by FDA in 2025?"

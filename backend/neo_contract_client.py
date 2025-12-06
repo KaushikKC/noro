@@ -18,7 +18,7 @@ from neo3.wallet import utils as walletutils
 
 # RPC URLs for different networks
 DEFAULT_MAINNET_RPC = "https://mainmagnet.ngd.network:443"
-DEFAULT_TESTNET_RPC = "https://testmagnet.ngd.network:443"
+DEFAULT_TESTNET_RPC = "https://testnet1.neo.coz.io:443"
 
 
 class NeoContractClient:
@@ -133,8 +133,15 @@ class NeoContractClient:
         if self._session and not self._session.closed:
             return self._session
         
+        # For testnet RPC endpoints, we may need to disable SSL verification
+        # Some public RPC nodes have certificate issues
         ssl_context = ssl.create_default_context()
-        if os.getenv("NEO_RPC_ALLOW_INSECURE", "false").lower() in {"1", "true", "yes"}:
+        # Allow insecure SSL for testnet (common issue with public RPC nodes)
+        if (os.getenv("NEO_RPC_ALLOW_INSECURE", "false").lower() in {"1", "true", "yes"} or 
+            self.network == "testnet" or
+            "testnet" in self.rpc_url.lower() or
+            "coz.io" in self.rpc_url.lower()):
+            print(f"⚠️ [SSL] Disabling SSL verification for {self.rpc_url} (testnet/public RPC)")
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
         
@@ -242,11 +249,18 @@ class NeoContractClient:
         Returns:
             Dict containing the invocation result
         """
+        print(f"🔍 [INVOKE READ] Operation: {operation}")
+        print(f"🔍 [INVOKE READ] Contract hash (clean): {self.contract_hash_clean}")
+        print(f"🔍 [INVOKE READ] RPC URL: {self.rpc_url}")
+        print(f"🔍 [INVOKE READ] Args: {args}")
+        
         # Convert args to contract parameter format
         contract_args = []
         if args:
             for arg_value, arg_type in args:
-                contract_args.append(self._convert_to_contract_param(arg_value, arg_type))
+                param = self._convert_to_contract_param(arg_value, arg_type)
+                contract_args.append(param)
+                print(f"  📝 [INVOKE READ] Converted arg: {param}")
         
         # Build invoke function parameters
         invoke_params = [
@@ -258,56 +272,153 @@ class NeoContractClient:
         if signers:
             invoke_params.append(signers)
         
+        print(f"🔍 [INVOKE READ] Invoke params: {json.dumps(invoke_params, indent=2, default=str)}")
+        
         result = await self._make_request("invokefunction", invoke_params)
         
-        # Check if result is an error string
-        if isinstance(result, str) and ("error" in result.lower() or "failed" in result.lower() or "timeout" in result.lower()):
-            raise Exception(result)
+        print(f"📊 [INVOKE READ] Raw RPC response type: {type(result)}")
+        print(f"📊 [INVOKE READ] Raw RPC response: {json.dumps(result, indent=2, default=str) if isinstance(result, (dict, list)) else result}")
         
-        return self._handle_response(result)
+        # Check if result is an error string
+        if isinstance(result, str):
+            if any(keyword in result.lower() for keyword in ["error", "failed", "timeout", "cannot connect"]):
+                print(f"❌ [INVOKE READ] Error string returned: {result}")
+                raise Exception(result)
+            else:
+                print(f"⚠️ [INVOKE READ] Unexpected string result: {result}")
+        
+        # Handle response - extract result from JSON-RPC response
+        if isinstance(result, dict):
+            # Standard JSON-RPC response format
+            if "result" in result:
+                print(f"✅ [INVOKE READ] Found 'result' key in response")
+                return result["result"]
+            elif "error" in result:
+                error = result["error"]
+                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                error_code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
+                print(f"❌ [INVOKE READ] RPC error (code: {error_code}): {error_msg}")
+                raise Exception(f"RPC error (code: {error_code}): {error_msg}")
+            elif "stack" in result:
+                # Direct RPC response format (stack is directly in response, not in "result")
+                print(f"✅ [INVOKE READ] Found 'stack' directly in response (direct RPC format)")
+                return result
+            else:
+                print(f"⚠️ [INVOKE READ] No 'result', 'error', or 'stack' key in response, returning full dict")
+                return result
+        
+        print(f"⚠️ [INVOKE READ] Unexpected result type, returning as-is")
+        return result
     
     async def get_market(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
         Get market data from contract
-        Calls getMarket(string marketId) method
+        Calls getMarket(BigInteger marketId) method
+        Note: Contract expects Integer, not String
         """
         try:
+            print(f"🔍 [GET MARKET] Fetching market {market_id} from contract...")
             result = await self.invoke_read(
                 "getMarket",
-                args=[(market_id, "String")]
+                args=[(market_id, "Integer")]  # Changed from "String" to "Integer" to match contract
             )
+            
+            # Debug: print raw result
+            print(f"  [DEBUG] get_market({market_id}) raw result: {result}")
             
             # Parse stack result
             if "stack" in result and len(result["stack"]) > 0:
                 # The result is in the stack - parse it
                 stack_item = result["stack"][0]
+                stack_item_type = stack_item.get("type")
+                print(f"  [DEBUG] Stack item type: {stack_item_type}")
+                print(f"  [DEBUG] Full stack item: {json.dumps(stack_item, indent=2, default=str)}")
+                
+                # Handle "Any" type - this usually means null, but check if there's a value
+                if stack_item_type == "Any":
+                    # "Any" type with no value typically means null/empty
+                    if "value" not in stack_item or stack_item.get("value") is None:
+                        print(f"  [DEBUG] Stack item is 'Any' type with no value - market may not exist or be null")
+                        return None
+                    else:
+                        # Sometimes "Any" has a value - try to parse it
+                        print(f"  [DEBUG] Stack item is 'Any' type but has value: {stack_item.get('value')}")
+                        stack_item = {"type": "Array", "value": stack_item.get("value")}
+                        stack_item_type = "Array"
                 
                 # If it's a struct/array, we need to parse it
-                if stack_item.get("type") == "Array":
+                if stack_item_type == "Array":
                     # Parse array of market data
                     values = stack_item.get("value", [])
+                    print(f"  [DEBUG] Array has {len(values)} values")
+                    
                     if len(values) >= 11:  # Based on MarketData structure
-                        return {
+                        # MarketData struct order: [Question, Description, Category, ResolveDate, OracleUrl, Creator, CreatedAt, Resolved, Outcome, YesShares, NoShares]
+                        # Extract values from {type, value} structures
+                        question = self._parse_stack_value(values[0]) if len(values) > 0 else ""
+                        description = self._parse_stack_value(values[1]) if len(values) > 1 else ""
+                        category = self._parse_stack_value(values[2]) if len(values) > 2 else ""
+                        resolve_date = self._parse_stack_value(values[3]) if len(values) > 3 else 0
+                        oracle_url = self._parse_stack_value(values[4]) if len(values) > 4 else ""
+                        creator = self._parse_stack_value(values[5]) if len(values) > 5 else ""
+                        created_at = self._parse_stack_value(values[6]) if len(values) > 6 else 0
+                        resolved = self._parse_stack_value(values[7]) if len(values) > 7 else False
+                        outcome = self._parse_stack_value(values[8]) if len(values) > 8 else False
+                        yes_shares = self._parse_stack_value(values[9]) if len(values) > 9 else 0
+                        no_shares = self._parse_stack_value(values[10]) if len(values) > 10 else 0
+                        
+                        # Convert to proper types
+                        question_str = str(question) if question else ""
+                        description_str = str(description) if description else ""
+                        category_str = str(category) if category else "Others"
+                        resolve_date_int = int(resolve_date) if resolve_date else 0
+                        oracle_url_str = str(oracle_url) if oracle_url else ""
+                        creator_str = str(creator) if creator else ""
+                        created_at_int = int(created_at) if created_at else 0
+                        resolved_bool = bool(resolved) if resolved is not None else False
+                        outcome_val = outcome if outcome is not None else False
+                        yes_shares_int = int(yes_shares) if yes_shares else 0
+                        no_shares_int = int(no_shares) if no_shares else 0
+                        
+                        market_data = {
                             "id": market_id,
-                            "question": self._parse_stack_value(values[0]) if len(values) > 0 else "",
-                            "description": self._parse_stack_value(values[1]) if len(values) > 1 else "",
-                            "category": self._parse_stack_value(values[2]) if len(values) > 2 else "",
-                            "resolve_date": self._parse_stack_value(values[3]) if len(values) > 3 else 0,
-                            "oracle_url": self._parse_stack_value(values[4]) if len(values) > 4 else "",
-                            "creator": self._parse_stack_value(values[5]) if len(values) > 5 else "",
-                            "created_at": self._parse_stack_value(values[6]) if len(values) > 6 else 0,
-                            "yes_shares": self._parse_stack_value(values[7]) if len(values) > 7 else 0,
-                            "no_shares": self._parse_stack_value(values[8]) if len(values) > 8 else 0,
-                            "resolved": self._parse_stack_value(values[9]) if len(values) > 9 else False,
-                            "outcome": self._parse_stack_value(values[10]) if len(values) > 10 else False,
+                            "question": question_str,
+                            "description": description_str,
+                            "category": category_str,
+                            "resolve_date": resolve_date_int,
+                            "oracle_url": oracle_url_str,
+                            "creator": creator_str,
+                            "created_at": created_at_int,
+                            "yes_shares": yes_shares_int,
+                            "no_shares": no_shares_int,
+                            "resolved": resolved_bool,
+                            "outcome": outcome_val,
                         }
+                        question_preview = question_str[:50] if question_str else "N/A"
+                        print(f"✅ [GET MARKET] Parsed market {market_id}: question='{question_preview}...'")
+                        return market_data
+                    else:
+                        print(f"  [DEBUG] Array has only {len(values)} values, expected 11")
                 elif stack_item.get("type") == "ByteString":
                     # Might be null/empty
-                    return None
+                    byte_value = stack_item.get("value", "")
+                    if not byte_value or byte_value == "":
+                        print(f"  [DEBUG] Empty ByteString - market {market_id} not found")
+                        return None
+                    else:
+                        print(f"  [DEBUG] ByteString value: {byte_value[:50]}...")
+                else:
+                    print(f"  [DEBUG] Unexpected stack item type: {stack_item.get('type')}")
+                    print(f"  [DEBUG] Full stack item: {stack_item}")
+            else:
+                print(f"  [DEBUG] No stack in result or empty stack")
+                print(f"  [DEBUG] Full result: {result}")
             
             return None
         except Exception as e:
-            print(f"Error getting market: {e}")
+            print(f"  [ERROR] Error getting market {market_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _parse_stack_value(self, value: Any) -> Any:
@@ -321,14 +432,103 @@ class NeoContractClient:
     async def get_market_count(self) -> int:
         """Get total number of markets"""
         try:
+            print(f"🔍 [MARKET COUNT] ========== STARTING getMarketCount ==========")
+            print(f"🔍 [MARKET COUNT] Contract hash: {self.contract_hash}")
+            print(f"🔍 [MARKET COUNT] Contract hash (clean): {self.contract_hash_clean}")
+            print(f"🔍 [MARKET COUNT] RPC URL: {self.rpc_url}")
+            print(f"🔍 [MARKET COUNT] Network: {self.network}")
+            
             result = await self.invoke_read("getMarketCount", args=[])
-            if "stack" in result and len(result["stack"]) > 0:
-                value = result["stack"][0].get("value", "0")
-                return int(value) if isinstance(value, (int, str)) else 0
+            print(f"📊 [MARKET COUNT] Invoke result type: {type(result)}")
+            print(f"📊 [MARKET COUNT] Invoke result keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
+            print(f"📊 [MARKET COUNT] Full result: {json.dumps(result, indent=2, default=str) if isinstance(result, dict) else result}")
+            
+            if not isinstance(result, dict):
+                print(f"❌ [MARKET COUNT] Result is not a dict, it's: {type(result)}")
+                return 0
+            
+            if "stack" in result:
+                stack = result["stack"]
+                print(f"📊 [MARKET COUNT] Stack found, length: {len(stack) if isinstance(stack, list) else 'N/A'}")
+                
+                if isinstance(stack, list) and len(stack) > 0:
+                    stack_item = stack[0]
+                    print(f"📊 [MARKET COUNT] Stack item type: {type(stack_item)}")
+                    print(f"📊 [MARKET COUNT] Stack item: {json.dumps(stack_item, indent=2, default=str) if isinstance(stack_item, dict) else stack_item}")
+                    
+                    if isinstance(stack_item, dict):
+                        value = stack_item.get("value", "0")
+                        print(f"📊 [MARKET COUNT] Extracted value: {value} (type: {type(value)})")
+                        
+                        # Handle different value formats
+                        if isinstance(value, (int, str)):
+                            try:
+                                count = int(value)
+                                print(f"✅ [MARKET COUNT] Successfully parsed market count: {count}")
+                                return count
+                            except (ValueError, TypeError) as e:
+                                print(f"❌ [MARKET COUNT] Failed to convert value to int: {e}")
+                                return 0
+                        else:
+                            print(f"❌ [MARKET COUNT] Value is not int or str: {type(value)}")
+                            return 0
+                    else:
+                        print(f"❌ [MARKET COUNT] Stack item is not a dict: {type(stack_item)}")
+                        return 0
+                else:
+                    print(f"⚠️ [MARKET COUNT] Stack is empty or not a list")
+            else:
+                print(f"⚠️ [MARKET COUNT] No 'stack' key in result")
+                print(f"📊 [MARKET COUNT] Available keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+            
+            print(f"⚠️ [MARKET COUNT] Could not parse market count, returning 0")
             return 0
         except Exception as e:
-            print(f"Error getting market count: {e}")
+            print(f"❌ [MARKET COUNT] Exception getting market count: {e}")
+            print(f"❌ [MARKET COUNT] Exception type: {type(e)}")
+            import traceback
+            traceback.print_exc()
             return 0
+    
+    async def get_all_markets(self) -> List[Dict[str, Any]]:
+        """
+        Get all markets from contract
+        Iterates through market IDs from 1 to market_count
+        """
+        try:
+            print(f"🔍 [GET ALL MARKETS] Starting to fetch all markets...")
+            
+            # Get market count first
+            market_count = await self.get_market_count()
+            print(f"📊 [GET ALL MARKETS] Market count: {market_count}")
+            
+            if market_count == 0:
+                print(f"⚠️ [GET ALL MARKETS] No markets found in contract")
+                return []
+            
+            markets = []
+            # Iterate through all market IDs (1-indexed)
+            for market_id in range(1, market_count + 1):
+                try:
+                    print(f"🔍 [GET ALL MARKETS] Fetching market ID: {market_id}")
+                    market_data = await self.get_market(str(market_id))
+                    if market_data:
+                        market_data["id"] = str(market_id)
+                        markets.append(market_data)
+                        print(f"✅ [GET ALL MARKETS] Market {market_id}: {market_data.get('question', 'N/A')[:50]}")
+                    else:
+                        print(f"⚠️ [GET ALL MARKETS] Market {market_id} returned no data")
+                except Exception as e:
+                    print(f"❌ [GET ALL MARKETS] Error fetching market {market_id}: {e}")
+                    continue
+            
+            print(f"✅ [GET ALL MARKETS] Successfully fetched {len(markets)} markets")
+            return markets
+        except Exception as e:
+            print(f"❌ [GET ALL MARKETS] Error getting all markets: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     async def get_probability(self, market_id: str) -> float:
         """

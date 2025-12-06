@@ -6,13 +6,14 @@ using System;
 using System.ComponentModel;
 using System.Numerics;
 
-namespace PredictX
+namespace noro
 {
-    [DisplayName("PredictXMarket")]
-    [ContractAuthor("PredictX Team", "dev@predictx.io")]
+    [DisplayName("noro")]
+    [ContractAuthor("noro Team", "dev@predictx.io")]
     [ContractVersion("0.1.0")]
+    [ContractPermission("*")]
     [ContractDescription("Decentralized prediction market platform on Neo blockchain")]
-    public class PredictXMarket : SmartContract
+    public class NoroMarket : SmartContract
     {
         // Contract owner - TODO: Replace with actual owner address (use your wallet's script hash)
         // Format: 0x followed by 40 hex characters (20 bytes)
@@ -162,7 +163,8 @@ namespace PredictX
             string paymentKey = caller.ToString() + "_" + marketId.ToString() + "_yes";
             
             // Also check for transaction-scoped payment (same transaction)
-            string txPaymentKey = Runtime.Transaction.Hash.ToString() + "_" + caller.ToString() + "_" + marketId.ToString() + "_yes";
+            // Use a shorter key - just use caller + marketId + side (transaction hash is too long)
+            string txPaymentKey = "tx_" + caller.ToString() + "_" + marketId.ToString() + "_yes";
             var txPaymentAmount = pendingPaymentsMap.Get((ByteString)txPaymentKey);
             var paymentAmount = pendingPaymentsMap.Get((ByteString)paymentKey);
             
@@ -256,7 +258,8 @@ namespace PredictX
             string paymentKey = caller.ToString() + "_" + marketId.ToString() + "_no";
             
             // Also check for transaction-scoped payment (same transaction)
-            string txPaymentKey = Runtime.Transaction.Hash.ToString() + "_" + caller.ToString() + "_" + marketId.ToString() + "_no";
+            // Use a shorter key - just use caller + marketId + side (transaction hash is too long)
+            string txPaymentKey = "tx_" + caller.ToString() + "_" + marketId.ToString() + "_no";
             var txPaymentAmount = pendingPaymentsMap.Get((ByteString)txPaymentKey);
             var paymentAmount = pendingPaymentsMap.Get((ByteString)paymentKey);
             
@@ -590,6 +593,15 @@ namespace PredictX
             return sharesValue is null ? 0 : (BigInteger)sharesValue;
         }
 
+        // Empty onPayment method (required by Neo team)
+        // This allows the contract to receive NEP-17 tokens (GAS)
+        [DisplayName("onPayment")]
+        public static void OnPayment(UInt160 from, BigInteger amount, object data)
+        {
+            // Empty method as recommended by Neo team
+            // This is required for the contract to receive NEP-17 token payments
+        }
+
         // Handle NEP-17 token payments (GAS)
         // This is called automatically when someone sends GAS to this contract
         public static void OnNEP17Payment(UInt160 from, BigInteger amount, object data)
@@ -655,7 +667,8 @@ namespace PredictX
             StorageMap pendingPaymentsMap = new(Storage.CurrentContext, StringToBytes("pendingPay"));
             
             // Transaction-scoped payment (for same-transaction processing)
-            string txPaymentKey = Runtime.Transaction.Hash.ToString() + "_" + from.ToString() + "_" + marketId.ToString() + "_" + side;
+            // Use shorter key instead of full transaction hash (too long)
+            string txPaymentKey = "tx_" + from.ToString() + "_" + marketId.ToString() + "_" + side;
             var txExistingPayment = pendingPaymentsMap.Get((ByteString)txPaymentKey);
             BigInteger txTotalPayment = txExistingPayment == null ? amount : (BigInteger)txExistingPayment + amount;
             pendingPaymentsMap.Put((ByteString)txPaymentKey, txTotalPayment);
@@ -688,6 +701,231 @@ namespace PredictX
         {
             if (!IsOwner()) throw new Exception("No authorization.");
             ContractManagement.Destroy();
+        }
+
+        // ========== TEST FUNCTIONS FOR DEBUGGING ==========
+
+        /// <summary>
+        /// Test function to check contract state and permissions
+        /// </summary>
+        [DisplayName("testContractState")]
+        public static string TestContractState()
+        {
+            UInt160 caller = Runtime.Transaction.Sender;
+            BigInteger currentTime = Runtime.Time;
+            UInt160 contractHash = Runtime.ExecutingScriptHash;
+            BigInteger gasBalance = GAS.BalanceOf(contractHash);
+            
+            string result = "Contract State:\n";
+            result += "Caller: " + caller.ToString() + "\n";
+            result += "Current Time: " + currentTime.ToString() + "\n";
+            result += "Contract Hash: " + contractHash.ToString() + "\n";
+            result += "GAS Balance: " + gasBalance.ToString() + "\n";
+            result += "Calling Script Hash: " + Runtime.CallingScriptHash.ToString() + "\n";
+            
+            return result;
+        }
+
+        /// <summary>
+        /// Test function to check if buyYes can be called with given parameters
+        /// Returns detailed status without actually executing the trade
+        /// </summary>
+        [DisplayName("testBuyYes")]
+        public static string TestBuyYes(BigInteger marketId, BigInteger amount)
+        {
+            string result = "=== Test BuyYes ===\n";
+            
+            try
+            {
+                // Check amount
+                if (amount <= 0)
+                {
+                    return result + "ERROR: Amount must be greater than 0\n";
+                }
+                result += "Amount: " + amount.ToString() + " (valid)\n";
+
+                // Get market data
+                MarketData market = GetMarket(marketId);
+                if (market == null)
+                {
+                    return result + "ERROR: Market not found (ID: " + marketId.ToString() + ")\n";
+                }
+                result += "Market found: " + market.Question + "\n";
+
+                // Check if resolved
+                if (market.Resolved)
+                {
+                    return result + "ERROR: Market is already resolved\n";
+                }
+                result += "Market not resolved (OK)\n";
+
+                // Check resolve date
+                if (Runtime.Time >= market.ResolveDate)
+                {
+                    return result + "ERROR: Market resolve date has passed. Current: " + Runtime.Time.ToString() + ", Resolve: " + market.ResolveDate.ToString() + "\n";
+                }
+                result += "Resolve date check passed\n";
+
+                // Check caller
+                UInt160 caller = Runtime.Transaction.Sender;
+                result += "Caller: " + caller.ToString() + "\n";
+
+                // Check payment status
+                StorageMap pendingPaymentsMap = new(Storage.CurrentContext, StringToBytes("pendingPay"));
+                string paymentKey = caller.ToString() + "_" + marketId.ToString() + "_yes";
+                // Use shorter key instead of full transaction hash (too long)
+                string txPaymentKey = "tx_" + caller.ToString() + "_" + marketId.ToString() + "_yes";
+                
+                var txPaymentAmount = pendingPaymentsMap.Get((ByteString)txPaymentKey);
+                var paymentAmount = pendingPaymentsMap.Get((ByteString)paymentKey);
+                
+                BigInteger availableAmount = 0;
+                if (txPaymentAmount != null)
+                    availableAmount = (BigInteger)txPaymentAmount;
+                if (paymentAmount != null)
+                    availableAmount += (BigInteger)paymentAmount;
+                
+                result += "Available payment: " + availableAmount.ToString() + "\n";
+                result += "Required amount: " + amount.ToString() + "\n";
+
+                if (availableAmount < amount)
+                {
+                    result += "WARNING: Insufficient payment. Will attempt GAS transfer.\n";
+                    result += "GAS Contract Hash: " + GAS.Hash.ToString() + "\n";
+                    result += "Contract Hash: " + Runtime.ExecutingScriptHash.ToString() + "\n";
+                }
+                else
+                {
+                    result += "Payment sufficient (OK)\n";
+                }
+
+                // Check GAS balance
+                BigInteger contractGasBalance = GAS.BalanceOf(Runtime.ExecutingScriptHash);
+                BigInteger callerGasBalance = GAS.BalanceOf(caller);
+                result += "Contract GAS Balance: " + contractGasBalance.ToString() + "\n";
+                result += "Caller GAS Balance: " + callerGasBalance.ToString() + "\n";
+
+                result += "\n=== All checks passed ===\n";
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return result + "EXCEPTION: " + ex.Message + "\n";
+            }
+        }
+
+        /// <summary>
+        /// Test function to check GAS transfer capability
+        /// </summary>
+        [DisplayName("testGasTransfer")]
+        public static string TestGasTransfer(BigInteger amount)
+        {
+            string result = "=== Test GAS Transfer ===\n";
+            
+            try
+            {
+                UInt160 caller = Runtime.Transaction.Sender;
+                UInt160 contractHash = Runtime.ExecutingScriptHash;
+                
+                result += "Caller: " + caller.ToString() + "\n";
+                result += "Contract: " + contractHash.ToString() + "\n";
+                result += "Amount: " + amount.ToString() + "\n";
+                
+                // Check balances
+                BigInteger callerBalance = GAS.BalanceOf(caller);
+                BigInteger contractBalance = GAS.BalanceOf(contractHash);
+                
+                result += "Caller GAS Balance: " + callerBalance.ToString() + "\n";
+                result += "Contract GAS Balance: " + contractBalance.ToString() + "\n";
+                
+                if (callerBalance < amount)
+                {
+                    return result + "ERROR: Insufficient caller balance\n";
+                }
+                
+                // Try transfer (this will actually transfer, so use small amounts for testing)
+                if (amount > 0 && amount <= 1000000) // Only allow small test amounts
+                {
+                    bool transferResult = SafeTransfer(GAS.Hash, caller, contractHash, amount, "test");
+                    result += "Transfer result: " + transferResult.ToString() + "\n";
+                    
+                    BigInteger newContractBalance = GAS.BalanceOf(contractHash);
+                    result += "New Contract Balance: " + newContractBalance.ToString() + "\n";
+                }
+                else
+                {
+                    result += "Skipping actual transfer (amount too large for test)\n";
+                }
+                
+                result += "\n=== Test completed ===\n";
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return result + "EXCEPTION: " + ex.Message + "\n";
+            }
+        }
+
+        /// <summary>
+        /// Test function to check storage operations
+        /// </summary>
+        [DisplayName("testStorage")]
+        public static string TestStorage(BigInteger marketId)
+        {
+            string result = "=== Test Storage ===\n";
+            
+            try
+            {
+                result += "Market ID: " + marketId.ToString() + "\n";
+                
+                // Test market retrieval
+                MarketData market = GetMarket(marketId);
+                if (market == null)
+                {
+                    return result + "ERROR: Market not found\n";
+                }
+                
+                result += "Market Question: " + market.Question + "\n";
+                result += "Market Resolved: " + market.Resolved.ToString() + "\n";
+                result += "Yes Shares: " + market.YesShares.ToString() + "\n";
+                result += "No Shares: " + market.NoShares.ToString() + "\n";
+                
+                // Test storage read
+                StorageMap yesSharesMap = new(Storage.CurrentContext, YesSharesPrefix);
+                var yesSharesValue = yesSharesMap.Get((ByteString)marketId);
+                BigInteger yesShares = yesSharesValue is null ? 0 : (BigInteger)yesSharesValue;
+                result += "Storage Yes Shares: " + yesShares.ToString() + "\n";
+                
+                // Test storage write (increment by 1 for test)
+                yesShares += 1;
+                yesSharesMap.Put((ByteString)marketId, yesShares);
+                result += "Storage write test: OK\n";
+                
+                // Verify write
+                var verifyValue = yesSharesMap.Get((ByteString)marketId);
+                BigInteger verifyShares = verifyValue is null ? 0 : (BigInteger)verifyValue;
+                result += "Verified Shares: " + verifyShares.ToString() + "\n";
+                
+                // Revert test change
+                yesShares -= 1;
+                yesSharesMap.Put((ByteString)marketId, yesShares);
+                
+                result += "\n=== Storage test passed ===\n";
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return result + "EXCEPTION: " + ex.Message + "\n";
+            }
+        }
+
+        /// <summary>
+        /// Simple test function that just returns success
+        /// </summary>
+        [DisplayName("testSimple")]
+        public static string TestSimple()
+        {
+            return "Test function called successfully! Contract is working.";
         }
     }
 
