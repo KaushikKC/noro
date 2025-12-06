@@ -32,7 +32,13 @@ interface AgentMessage {
   attachments?: { type: string; neoFsHash: string }[];
 }
 
-export function AgentChat({ marketId }: { marketId: string }) {
+export function AgentChat({
+  marketId,
+  analysis,
+}: {
+  marketId: string;
+  analysis?: AgentAnalysis | null;
+}) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,8 +109,24 @@ export function AgentChat({ marketId }: { marketId: string }) {
     return msgs;
   };
 
-  // Fetch initial analysis
+  // Update messages when analysis prop changes
   useEffect(() => {
+    if (analysis) {
+      console.log("📊 [AgentChat] Received analysis prop:", analysis);
+      const msgs = convertAnalysisToMessages(analysis);
+      setMessages(msgs);
+      setIsLoading(false);
+      setError(null);
+    }
+  }, [analysis]);
+
+  // Fetch initial analysis only if not provided as prop
+  useEffect(() => {
+    // Skip if analysis is provided as prop
+    if (analysis) {
+      return;
+    }
+
     const fetchAnalysis = async () => {
       if (!marketId) return;
 
@@ -112,12 +134,14 @@ export function AgentChat({ marketId }: { marketId: string }) {
       setError(null);
 
       try {
-        const analysis = await analyzeMarket(marketId);
-        const msgs = convertAnalysisToMessages(analysis);
+        const fetchedAnalysis = await analyzeMarket(marketId);
+        const msgs = convertAnalysisToMessages(fetchedAnalysis);
         setMessages(msgs);
-      } catch (err: any) {
+      } catch (err) {
         console.error("Error fetching analysis:", err);
-        setError(err.message || "Failed to load agent analysis");
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to load agent analysis";
+        setError(errorMessage);
         // Show empty state message
         setMessages([
           {
@@ -136,7 +160,7 @@ export function AgentChat({ marketId }: { marketId: string }) {
     };
 
     fetchAnalysis();
-  }, [marketId]);
+  }, [marketId, analysis]);
 
   // Connect WebSocket for real-time updates
   useEffect(() => {
@@ -148,16 +172,24 @@ export function AgentChat({ marketId }: { marketId: string }) {
         (data) => {
           setIsConnected(true);
           if (data.type === "full_analysis" && data.data) {
-            const msgs = convertAnalysisToMessages(data.data);
+            const analysisData = data.data as AgentAnalysis;
+            const msgs = convertAnalysisToMessages(analysisData);
             setMessages(msgs);
           } else if (data.type === "agent_update") {
             // Add individual agent update
+            const agentRole = (data.agent as AgentRole) || "Analyzer";
+            const updateType =
+              (data.updateType as "analysis" | "trade" | "verdict") ||
+              "analysis";
             const newMsg: AgentMessage = {
               id: `update-${Date.now()}`,
-              agent: data.agent || "Analyzer",
-              type: data.type || "analysis",
-              content: data.content || data.message || "Agent update",
-              confidence: data.confidence || 0.5,
+              agent: agentRole,
+              type: updateType,
+              content:
+                (data.content as string) ||
+                (data.message as string) ||
+                "Agent update",
+              confidence: (data.confidence as number) || 0.5,
               timestamp: Date.now(),
             };
             setMessages((prev) => [...prev, newMsg]);
@@ -228,19 +260,24 @@ export function AgentChat({ marketId }: { marketId: string }) {
                 <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Analyzing...
               </Badge>
             )}
-            {!isLoading && isConnected && (
-              <Badge
-                variant="outline"
-                className="animate-pulse text-primary border-primary"
-              >
-                Live
-              </Badge>
-            )}
-            {!isLoading && !isConnected && (
-              <Badge variant="outline" className="text-muted-foreground">
-                Offline
-              </Badge>
-            )}
+            {!isLoading &&
+              (isConnected || (analysis && messages.length > 0)) && (
+                <Badge
+                  variant="outline"
+                  className="animate-pulse text-primary border-primary bg-primary/10"
+                >
+                  <div className="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse" />
+                  Live
+                </Badge>
+              )}
+            {!isLoading &&
+              !isConnected &&
+              !analysis &&
+              messages.length === 0 && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  Offline
+                </Badge>
+              )}
           </div>
         </div>
       </CardHeader>

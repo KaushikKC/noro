@@ -249,18 +249,12 @@ class NeoContractClient:
         Returns:
             Dict containing the invocation result
         """
-        print(f"🔍 [INVOKE READ] Operation: {operation}")
-        print(f"🔍 [INVOKE READ] Contract hash (clean): {self.contract_hash_clean}")
-        print(f"🔍 [INVOKE READ] RPC URL: {self.rpc_url}")
-        print(f"🔍 [INVOKE READ] Args: {args}")
-        
         # Convert args to contract parameter format
         contract_args = []
         if args:
             for arg_value, arg_type in args:
                 param = self._convert_to_contract_param(arg_value, arg_type)
                 contract_args.append(param)
-                print(f"  📝 [INVOKE READ] Converted arg: {param}")
         
         # Build invoke function parameters
         invoke_params = [
@@ -272,12 +266,10 @@ class NeoContractClient:
         if signers:
             invoke_params.append(signers)
         
-        print(f"🔍 [INVOKE READ] Invoke params: {json.dumps(invoke_params, indent=2, default=str)}")
-        
         result = await self._make_request("invokefunction", invoke_params)
         
-        print(f"📊 [INVOKE READ] Raw RPC response type: {type(result)}")
-        print(f"📊 [INVOKE READ] Raw RPC response: {json.dumps(result, indent=2, default=str) if isinstance(result, (dict, list)) else result}")
+        # print(f"📊 [INVOKE READ] Raw RPC response type: {type(result)}")
+        # print(f"📊 [INVOKE READ] Raw RPC response: {json.dumps(result, indent=2, default=str) if isinstance(result, (dict, list)) else result}")
         
         # Check if result is an error string
         if isinstance(result, str):
@@ -291,7 +283,7 @@ class NeoContractClient:
         if isinstance(result, dict):
             # Standard JSON-RPC response format
             if "result" in result:
-                print(f"✅ [INVOKE READ] Found 'result' key in response")
+                # print(f"✅ [INVOKE READ] Found 'result' key in response")
                 return result["result"]
             elif "error" in result:
                 error = result["error"]
@@ -301,7 +293,7 @@ class NeoContractClient:
                 raise Exception(f"RPC error (code: {error_code}): {error_msg}")
             elif "stack" in result:
                 # Direct RPC response format (stack is directly in response, not in "result")
-                print(f"✅ [INVOKE READ] Found 'stack' directly in response (direct RPC format)")
+                # print(f"✅ [INVOKE READ] Found 'stack' directly in response (direct RPC format)")
                 return result
             else:
                 print(f"⚠️ [INVOKE READ] No 'result', 'error', or 'stack' key in response, returning full dict")
@@ -332,7 +324,7 @@ class NeoContractClient:
                 stack_item = result["stack"][0]
                 stack_item_type = stack_item.get("type")
                 print(f"  [DEBUG] Stack item type: {stack_item_type}")
-                print(f"  [DEBUG] Full stack item: {json.dumps(stack_item, indent=2, default=str)}")
+                # print(f"  [DEBUG] Full stack item: {json.dumps(stack_item, indent=2, default=str)}")
                 
                 # Handle "Any" type - this usually means null, but check if there's a value
                 if stack_item_type == "Any":
@@ -409,7 +401,7 @@ class NeoContractClient:
                         print(f"  [DEBUG] ByteString value: {byte_value[:50]}...")
                 else:
                     print(f"  [DEBUG] Unexpected stack item type: {stack_item.get('type')}")
-                    print(f"  [DEBUG] Full stack item: {stack_item}")
+                    # print(f"  [DEBUG] Full stack item: {stack_item}")
             else:
                 print(f"  [DEBUG] No stack in result or empty stack")
                 print(f"  [DEBUG] Full result: {result}")
@@ -432,16 +424,7 @@ class NeoContractClient:
     async def get_market_count(self) -> int:
         """Get total number of markets"""
         try:
-            print(f"🔍 [MARKET COUNT] ========== STARTING getMarketCount ==========")
-            print(f"🔍 [MARKET COUNT] Contract hash: {self.contract_hash}")
-            print(f"🔍 [MARKET COUNT] Contract hash (clean): {self.contract_hash_clean}")
-            print(f"🔍 [MARKET COUNT] RPC URL: {self.rpc_url}")
-            print(f"🔍 [MARKET COUNT] Network: {self.network}")
-            
             result = await self.invoke_read("getMarketCount", args=[])
-            print(f"📊 [MARKET COUNT] Invoke result type: {type(result)}")
-            print(f"📊 [MARKET COUNT] Invoke result keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
-            print(f"📊 [MARKET COUNT] Full result: {json.dumps(result, indent=2, default=str) if isinstance(result, dict) else result}")
             
             if not isinstance(result, dict):
                 print(f"❌ [MARKET COUNT] Result is not a dict, it's: {type(result)}")
@@ -464,7 +447,7 @@ class NeoContractClient:
                         if isinstance(value, (int, str)):
                             try:
                                 count = int(value)
-                                print(f"✅ [MARKET COUNT] Successfully parsed market count: {count}")
+                                # Successfully parsed
                                 return count
                             except (ValueError, TypeError) as e:
                                 print(f"❌ [MARKET COUNT] Failed to convert value to int: {e}")
@@ -496,14 +479,10 @@ class NeoContractClient:
         Iterates through market IDs from 1 to market_count
         """
         try:
-            print(f"🔍 [GET ALL MARKETS] Starting to fetch all markets...")
-            
             # Get market count first
             market_count = await self.get_market_count()
-            print(f"📊 [GET ALL MARKETS] Market count: {market_count}")
             
             if market_count == 0:
-                print(f"⚠️ [GET ALL MARKETS] No markets found in contract")
                 return []
             
             markets = []

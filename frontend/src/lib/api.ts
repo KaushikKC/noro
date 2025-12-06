@@ -441,6 +441,74 @@ export interface NeoFSStatus {
 /**
  * Verify if a market exists in NeoFS storage
  */
+/**
+ * Manually trigger storage of a market in NeoFS
+ * Use this after creating a market directly via contract
+ */
+export async function storeMarketInNeoFS(
+  marketId: string,
+  marketData: {
+    question: string;
+    description: string;
+    category: string;
+    resolveDate: string;
+    oracleUrl?: string;
+  }
+): Promise<{
+  success: boolean;
+  market_id?: string;
+  container_id?: string;
+  object_id?: string;
+  message?: string;
+  reason?: string;
+}> {
+  try {
+    if (!marketData || !marketData.question) {
+      return {
+        success: false,
+        reason: "Market data with question is required",
+      };
+    }
+
+    console.log(`📤 [FRONTEND] Storing market ${marketId} in NeoFS...`, {
+      question: marketData.question.substring(0, 30),
+      category: marketData.category,
+    });
+
+    const response = await fetch(
+      `${API_BASE}/markets/${marketId}/neofs/store`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(marketData),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(
+        `❌ [FRONTEND] Store failed: ${response.status} ${response.statusText}`,
+        errorText
+      );
+      throw new Error(
+        `Failed to store in NeoFS: ${response.statusText} - ${errorText}`
+      );
+    }
+
+    const result = await response.json();
+    console.log(`✅ [FRONTEND] Store result:`, result);
+    return result;
+  } catch (error) {
+    console.error("Error storing market in NeoFS:", error);
+    return {
+      success: false,
+      reason: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
 export async function verifyMarketInNeoFS(
   marketId: string
 ): Promise<NeoFSVerification> {

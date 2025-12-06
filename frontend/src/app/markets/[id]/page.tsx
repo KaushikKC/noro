@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
 import { getMarket, getProbability } from "@/lib/neoline";
 import {
   analyzeMarket,
+  analyzeMarketTest,
   getTradeProposal,
   type AgentAnalysis,
   type TradeProposal,
@@ -35,6 +36,7 @@ function formatVolume(yesShares: number, noShares: number): string {
 
 export default function MarketDetailsPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params?.id as string;
   const [marketData, setMarketData] = useState<{
     question: string;
@@ -69,6 +71,118 @@ export default function MarketDetailsPage() {
       setError(null);
 
       try {
+        // TEST MODE: Handle all test markets with their specific data
+        const testMarkets: Record<
+          string,
+          {
+            question: string;
+            description: string;
+            category: string;
+            creator: string;
+            created: string;
+            resolveDate: string;
+            volume: string;
+            probability: number;
+            resolved: boolean;
+            oracleUrl: string;
+          }
+        > = {
+          test: {
+            question: "Will it rain in London, UK on December 25, 2024?",
+            description: "Test market for agent analysis - Weather prediction",
+            category: "Climate",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "December 25, 2024",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl:
+              "https://www.metoffice.gov.uk/weather/forecast/gcpvj0v07",
+          },
+          test_1: {
+            question: "Will it rain in London, UK on December 25, 2024?",
+            description: "Test market for agent analysis - Weather prediction",
+            category: "Climate",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "December 25, 2024",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl:
+              "https://www.metoffice.gov.uk/weather/forecast/gcpvj0v07",
+          },
+          test_2: {
+            question:
+              "Will Bitcoin (BTC) price exceed $100,000 by January 1, 2025?",
+            description:
+              "Test market for agent analysis - Cryptocurrency price prediction",
+            category: "Crypto",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "January 1, 2025",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl:
+              "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+          },
+          test_3: {
+            question:
+              "Will a new room-temperature superconductor be verified by Nature journal by 2025?",
+            description:
+              "Test market for agent analysis - Scientific breakthrough prediction",
+            category: "Physics",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "December 31, 2025",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl:
+              "https://www.nature.com/search?q=room+temperature+superconductor",
+          },
+          test_4: {
+            question:
+              "Will the 2024 Paris Olympics have more than 10,000 athletes participating?",
+            description:
+              "Test market for agent analysis - Sports event prediction",
+            category: "Sports",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "August 11, 2024",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl: "https://olympics.com/en/paris-2024/",
+          },
+          test_5: {
+            question:
+              "Will global average temperature exceed 1.5°C above pre-industrial levels in 2024?",
+            description:
+              "Test market for agent analysis - Climate change prediction",
+            category: "Climate",
+            creator: "Test User",
+            created: new Date().toLocaleDateString(),
+            resolveDate: "December 31, 2024",
+            volume: "0",
+            probability: 50,
+            resolved: false,
+            oracleUrl:
+              "https://climate.nasa.gov/vital-signs/global-temperature/",
+          },
+        };
+
+        if (id.startsWith("test")) {
+          const testMarket = testMarkets[id] || testMarkets.test;
+          console.log(`🧪 [TEST MODE] Using test market: ${id}`, testMarket);
+          setMarketData(testMarket);
+          setError(null); // Clear any errors
+          setIsLoading(false);
+          return;
+        }
+
         // Fetch directly from contract using NeoLine
         console.log(
           `🔍 [MARKET DETAIL] Fetching market ${id} from contract...`
@@ -177,8 +291,14 @@ export default function MarketDetailsPage() {
     const fetchAgentData = async () => {
       if (!id) return;
 
+      // Skip trade proposal fetch for test markets - it will come from analysis
+      if (id.startsWith("test")) {
+        console.log("⚠️ Skipping trade proposal fetch for test market");
+        return;
+      }
+
       try {
-        // Try to get trade proposal
+        // Try to get trade proposal (only for real markets)
         const proposal = await getTradeProposal(id);
         setTradeProposal(proposal);
       } catch (err) {
@@ -197,7 +317,27 @@ export default function MarketDetailsPage() {
     setAnalysisError(null);
 
     try {
-      const analysis = await analyzeMarket(id);
+      let analysis: AgentAnalysis;
+
+      // If market data is available, use it; otherwise use test endpoint with question
+      if (marketData && marketData.question) {
+        console.log("🧪 Using test endpoint with market data:", {
+          question: marketData.question,
+          oracleUrl: marketData.oracleUrl,
+        });
+
+        // Use test endpoint with question and oracle URL
+        analysis = await analyzeMarketTest(
+          marketData.question,
+          marketData.oracleUrl,
+          id
+        );
+      } else {
+        // Fallback to regular endpoint
+        console.log("📊 Using regular analyze endpoint for market:", id);
+        analysis = await analyzeMarket(id);
+      }
+
       setAgentAnalysis(analysis);
 
       // Update trade proposal if available
@@ -323,6 +463,62 @@ export default function MarketDetailsPage() {
         </div>
       )}
 
+      {/* Test Market Selector - Only show for test markets */}
+      {(id?.startsWith("test") || id === "test") && (
+        <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Brain className="w-5 h-5 text-blue-400" />
+            <h3 className="font-bold text-blue-400">Test Market Examples</h3>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            Switch between different test markets to see agent analysis on
+            various topics:
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <Button
+              variant={id === "test_1" ? "default" : "outline"}
+              size="sm"
+              onClick={() => router.push("/markets/test_1")}
+              className="text-xs"
+            >
+              Weather
+            </Button>
+            <Button
+              variant={id === "test_2" ? "default" : "outline"}
+              size="sm"
+              onClick={() => router.push("/markets/test_2")}
+              className="text-xs"
+            >
+              Crypto (BTC)
+            </Button>
+            <Button
+              variant={id === "test_3" ? "default" : "outline"}
+              size="sm"
+              onClick={() => router.push("/markets/test_3")}
+              className="text-xs"
+            >
+              Science
+            </Button>
+            <Button
+              variant={id === "test_4" ? "default" : "outline"}
+              size="sm"
+              onClick={() => router.push("/markets/test_4")}
+              className="text-xs"
+            >
+              Sports
+            </Button>
+            <Button
+              variant={id === "test_5" ? "default" : "outline"}
+              size="sm"
+              onClick={() => router.push("/markets/test_5")}
+              className="text-xs"
+            >
+              Climate
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Column: Gauge & Chat */}
         <div className="lg:col-span-2 space-y-8">
@@ -330,13 +526,70 @@ export default function MarketDetailsPage() {
           <div className="flex flex-col md:flex-row items-center justify-between bg-card border border-border rounded-2xl p-8 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-transparent" />
             <div className="z-10">
-              <ProbabilityGauge probability={marketData.probability} />
+              <ProbabilityGauge
+                probability={
+                  agentAnalysis?.summary?.consensus_probability
+                    ? Math.round(
+                        agentAnalysis.summary.consensus_probability * 100
+                      )
+                    : marketData.probability
+                }
+              />
             </div>
             <div className="z-10 max-w-sm space-y-4 text-center md:text-left mt-6 md:mt-0">
-              <h3 className="text-xl font-bold">Market Sentiment</h3>
+              <h3 className="text-xl font-bold">
+                {agentAnalysis?.summary?.consensus_probability
+                  ? "Agent Consensus Probability"
+                  : "Market Sentiment"}
+              </h3>
               <p className="text-muted-foreground text-sm">
-                Current probability based on market shares.
+                {agentAnalysis?.summary?.consensus_probability
+                  ? `Based on ${
+                      agentAnalysis.summary.analyses_count
+                    } agent analyses with ${Math.round(
+                      agentAnalysis.summary.consensus_confidence * 100
+                    )}% confidence`
+                  : "Current probability based on market shares."}
               </p>
+              {agentAnalysis?.trade_proposal && (
+                <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-blue-500/20 to-purple-500/20 border-2 border-blue-500/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-5 h-5 text-blue-400" />
+                    <h4 className="font-bold text-lg text-blue-400">
+                      Agent Recommendation
+                    </h4>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge
+                      variant={
+                        agentAnalysis.trade_proposal.action === "BUY_YES"
+                          ? "default"
+                          : "destructive"
+                      }
+                      className="text-lg px-4 py-2"
+                    >
+                      {agentAnalysis.trade_proposal.action === "BUY_YES"
+                        ? "BUY YES"
+                        : "BUY NO"}
+                    </Badge>
+                    <span className="text-white font-bold">
+                      {agentAnalysis.trade_proposal.amount.toFixed(2)} GAS
+                    </span>
+                    <span className="text-muted-foreground text-sm">
+                      (
+                      {Math.round(
+                        agentAnalysis.trade_proposal.confidence * 100
+                      )}
+                      % confidence)
+                    </span>
+                  </div>
+                  {agentAnalysis.trade_proposal.reasoning && (
+                    <p className="text-sm text-muted-foreground mt-2 italic">
+                      &quot;{agentAnalysis.trade_proposal.reasoning}&quot;
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="flex gap-4 justify-center md:justify-start">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-white">
@@ -351,7 +604,7 @@ export default function MarketDetailsPage() {
           </div>
 
           {/* Agent Chat / Debate */}
-          <AgentChat marketId={id} />
+          <AgentChat marketId={id} analysis={agentAnalysis} />
 
           {/* Description & Evidence */}
           <div className="space-y-4">
@@ -411,49 +664,72 @@ export default function MarketDetailsPage() {
                 Agent Signal
               </h4>
               <p className="text-sm text-muted-foreground">
-                No agent analysis yet. Click "Analyze Market" to get
+                No agent analysis yet. Click &quot;Analyze Market&quot; to get
                 recommendations.
               </p>
             </div>
           )}
 
           {agentAnalysis && (
-            <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20">
-              <h4 className="font-bold text-green-400 mb-2">
-                Analysis Summary
-              </h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">
-                    Consensus Probability:
-                  </span>
-                  <span className="font-bold text-green-400">
-                    {(
-                      agentAnalysis.summary.consensus_probability * 100
-                    ).toFixed(1)}
-                    %
-                  </span>
+            <div className="p-5 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 border-2 border-green-500/40 shadow-lg">
+              <div className="flex items-center gap-2 mb-4">
+                <Brain className="w-5 h-5 text-green-400" />
+                <h4 className="font-bold text-lg text-green-400">
+                  Analysis Summary
+                </h4>
+              </div>
+              <div className="space-y-3">
+                <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-sm text-muted-foreground">
+                      Consensus Probability:
+                    </span>
+                    <span className="text-2xl font-bold text-green-400">
+                      {(
+                        agentAnalysis.summary.consensus_probability * 100
+                      ).toFixed(1)}
+                      %
+                    </span>
+                  </div>
+                  <div className="h-2 bg-secondary rounded-full overflow-hidden mt-2">
+                    <div
+                      className="h-full bg-green-400 transition-all duration-500"
+                      style={{
+                        width: `${
+                          agentAnalysis.summary.consensus_probability * 100
+                        }%`,
+                      }}
+                    />
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Confidence:</span>
-                  <span className="font-bold text-green-400">
-                    {(agentAnalysis.summary.consensus_confidence * 100).toFixed(
-                      0
-                    )}
-                    %
-                  </span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-2 bg-black/20 rounded border border-border/50">
+                    <div className="text-xs text-muted-foreground mb-1">
+                      Confidence
+                    </div>
+                    <div className="text-lg font-bold text-green-400">
+                      {(
+                        agentAnalysis.summary.consensus_confidence * 100
+                      ).toFixed(0)}
+                      %
+                    </div>
+                  </div>
+                  <div className="p-2 bg-black/20 rounded border border-border/50">
+                    <div className="text-xs text-muted-foreground mb-1">
+                      Agreement
+                    </div>
+                    <div className="text-lg font-bold text-green-400 capitalize">
+                      {agentAnalysis.summary.agreement_level}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Agreement:</span>
-                  <span className="font-bold text-green-400 capitalize">
-                    {agentAnalysis.summary.agreement_level}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Analyses:</span>
-                  <span className="font-bold text-green-400">
-                    {agentAnalysis.summary.analyses_count}
-                  </span>
+                <div className="p-2 bg-black/20 rounded border border-border/50 text-center">
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Agent Analyses
+                  </div>
+                  <div className="text-lg font-bold text-green-400">
+                    {agentAnalysis.summary.analyses_count} agents analyzed
+                  </div>
                 </div>
               </div>
             </div>

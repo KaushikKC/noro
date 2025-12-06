@@ -27,12 +27,25 @@ class NoroOrchestrator:
         # Use environment variable or default to gemini
         import os
         from dotenv import load_dotenv
-        load_dotenv()
+        from pathlib import Path
+        
+        # Load .env from agents directory (in case we're imported from backend)
+        agents_dir = Path(__file__).parent
+        env_file = agents_dir / ".env"
+        if env_file.exists():
+            load_dotenv(env_file, override=True)
+        else:
+            # Fallback to current directory .env
+            load_dotenv()
         
         if llm_provider is None:
             llm_provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini")
         if model_name is None:
             model_name = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
+        
+        # Debug: Print what provider we're using
+        api_key_set = bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+        print(f"🔧 Orchestrator init: provider={llm_provider}, model={model_name}, API key={'SET' if api_key_set else 'NOT SET'}")
         """
         Initialize orchestrator with agents
         
@@ -76,9 +89,9 @@ class NoroOrchestrator:
         
         # Step 2: Propose trade
         print("\n💰 Running Trader Agent...")
-        # Add delay to avoid rate limits
+        # Add longer delay to avoid rate limits (Gemini free tier is strict)
         import asyncio
-        await asyncio.sleep(1)  # 1 second delay
+        await asyncio.sleep(5)  # 5 second delay for Gemini free tier
         try:
             trade_proposal = await self.trader.propose_trade(
                 analysis,
@@ -86,7 +99,12 @@ class NoroOrchestrator:
                 bankroll=bankroll
             )
         except Exception as e:
-            print(f"   ⚠️  Trader agent hit rate limit: {e}")
+            error_str = str(e).lower()
+            if "rate limit" in error_str or "quota" in error_str:
+                print(f"   ⚠️  Trader agent hit rate limit: {e}")
+                print(f"   💡 Using fallback trade based on first analysis")
+            else:
+                print(f"   ⚠️  Trader agent error: {e}")
             # Fallback trade proposal
             trade_proposal = {
                 "action": "BUY_YES" if analysis.get("probability", 0.5) > 0.5 else "BUY_NO",
@@ -106,35 +124,54 @@ class NoroOrchestrator:
         # Run multiple analyses for consensus (simulate multiple analyzer runs)
         analyses = [analysis]  # Start with first analysis
         
-        # Run 2 more analyses for consensus (with delays to avoid rate limits)
+        # For Gemini free tier, reduce to 1 additional analysis (total 2 instead of 3)
+        # This reduces API calls and rate limit issues
+        additional_analyses_count = 1  # Reduced from 2 to 1 for rate limit management
+        
+        # Run additional analyses for consensus (with longer delays to avoid rate limits)
         import asyncio
-        for i in range(2):
-            print(f"   Running analysis {i+2}/3...")
-            # Add delay to avoid rate limits (Gemini free tier has limits)
-            await asyncio.sleep(2)  # 2 second delay between calls
+        for i in range(additional_analyses_count):
+            print(f"   Running analysis {i+2}/{additional_analyses_count + 1}...")
+            # Add longer delay to avoid rate limits (Gemini free tier is strict)
+            await asyncio.sleep(10)  # 10 second delay between calls for Gemini free tier
             try:
                 additional_analysis = await self.analyzer.analyze(market_question, max_papers=max_papers)
                 analyses.append(additional_analysis)
+                print(f"   ✅ Analysis {i+2} completed successfully")
             except Exception as e:
-                print(f"   ⚠️  Analysis {i+2} failed (rate limit?): {e}")
+                error_str = str(e).lower()
+                if "rate limit" in error_str or "quota" in error_str:
+                    print(f"   ⚠️  Analysis {i+2} hit rate limit: {e}")
+                    print(f"   💡 Using first analysis as fallback")
+                else:
+                    print(f"   ⚠️  Analysis {i+2} failed: {e}")
                 # Use first analysis as fallback if subsequent ones fail
                 analyses.append(analysis)
         
-        # Judge aggregates all analyses (with delay)
-        await asyncio.sleep(1)  # 1 second delay
+        # Judge aggregates all analyses (with longer delay)
+        await asyncio.sleep(5)  # 5 second delay before judge
         try:
             judgment = await self.judge.aggregate(analyses, market_question)
         except Exception as e:
-            print(f"   ⚠️  Judge agent hit rate limit: {e}")
-            # Fallback judgment using first analysis
+            error_str = str(e).lower()
+            if "rate limit" in error_str or "quota" in error_str:
+                print(f"   ⚠️  Judge agent hit rate limit: {e}")
+                print(f"   💡 Using weighted average fallback")
+            else:
+                print(f"   ⚠️  Judge agent error: {e}")
+            # Fallback judgment using weighted average of available analyses
+            probabilities = [a.get("probability", 0.5) for a in analyses]
+            confidences = [a.get("confidence", 0.5) for a in analyses]
+            weighted_prob = sum(p * c for p, c in zip(probabilities, confidences)) / sum(confidences) if confidences else 0.5
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
             judgment = {
-                "consensus_probability": analysis.get("probability", 0.5),
-                "consensus_confidence": analysis.get("confidence", 0.5),
+                "consensus_probability": weighted_prob,
+                "consensus_confidence": avg_confidence,
                 "agent_count": len(analyses),
-                "agreement_level": "single",
-                "reasoning": "Using first analysis due to rate limits",
-                "weighted_average": analysis.get("probability", 0.5),
-                "confidence_weighted_avg": analysis.get("confidence", 0.5)
+                "agreement_level": "single" if len(analyses) == 1 else "medium",
+                "reasoning": f"Using weighted average of {len(analyses)} analyses due to rate limits",
+                "weighted_average": weighted_prob,
+                "confidence_weighted_avg": avg_confidence
             }
         
         print(f"✅ Consensus judgment complete:")

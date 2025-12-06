@@ -186,8 +186,9 @@ class NeoFSClient:
             # For container tokens
             if token_type == "container":
                 # Container tokens use 'verb' parameter
+                # The tool signature shows both verb and operation have defaults
                 params["verb"] = verb or "PUT"  # Default to PUT if not specified
-                params["operation"] = ""  # Empty for container tokens
+                # Don't set operation for container tokens - let tool use its default
                 # For PUT (create), container_id should be empty string
                 # For DELETE/SETEACL, container_id is required
                 if params["verb"] in ["DELETE", "SETEACL"]:
@@ -201,25 +202,40 @@ class NeoFSClient:
             elif token_type == "object":
                 # Object tokens use 'operation' parameter
                 params["operation"] = operation or "PUT"  # Default to PUT if not specified
-                params["verb"] = ""  # Empty for object tokens
+                # Don't set verb for object tokens - let tool use its default
                 params["container_id"] = container_id or ""  # Optional for object tokens
             
             print(f"🔑 [NEOFS] Bearer token params: {params}")
             print(f"🔑 [NEOFS] Owner address available: {self.owner_address[:20] if self.owner_address else 'NOT SET'}...")
             print(f"🔑 [NEOFS] Private key available: {'SET' if self.private_key_wif else 'NOT SET'}")
             
-            # CRITICAL: Verify environment variables are set before calling tool
-            # The tool reads owner_address from NEOFS_OWNER_ADDRESS env var
+            # CRITICAL: Ensure environment variables are set before calling tool
+            # The tool's get_shared_neofs_client() reads from environment variables
+            # We must set them here to ensure the shared client can be created
             env_owner = os.getenv("NEOFS_OWNER_ADDRESS", "")
             env_key = os.getenv("NEOFS_PRIVATE_KEY_WIF", "")
-            print(f"🔑 [NEOFS] Environment check - Owner: {'SET' if env_owner else 'NOT SET'}, Key: {'SET' if env_key else 'NOT SET'}")
+            env_base_url = os.getenv("NEOFS_BASE_URL", "")
             
-            if not env_owner or not env_key:
+            # If not set, use our instance values
+            if not env_owner and self.owner_address:
+                os.environ["NEOFS_OWNER_ADDRESS"] = self.owner_address
+                env_owner = self.owner_address
+            if not env_key and self.private_key_wif:
+                os.environ["NEOFS_PRIVATE_KEY_WIF"] = self.private_key_wif
+                env_key = self.private_key_wif
+            if not env_base_url and self.base_url:
+                os.environ["NEOFS_BASE_URL"] = self.base_url
+                env_base_url = self.base_url
+            
+            print(f"🔑 [NEOFS] Environment check - Owner: {'SET' if env_owner else 'NOT SET'}, Key: {'SET' if env_key else 'NOT SET'}, Base URL: {'SET' if env_base_url else 'NOT SET'}")
+            
+            if not env_owner or not env_key or not env_base_url:
                 error_msg = (
                     f"NeoFS credentials not set in environment! "
                     f"Owner: {'SET' if env_owner else 'MISSING'}, "
-                    f"Key: {'SET' if env_key else 'MISSING'}. "
-                    f"Set NEOFS_OWNER_ADDRESS and NEOFS_PRIVATE_KEY_WIF in .env file."
+                    f"Key: {'SET' if env_key else 'MISSING'}, "
+                    f"Base URL: {'SET' if env_base_url else 'MISSING'}. "
+                    f"Set NEOFS_OWNER_ADDRESS, NEOFS_PRIVATE_KEY_WIF, and NEOFS_BASE_URL in .env file."
                 )
                 print(f"❌ [NEOFS] {error_msg}")
                 raise ValueError(error_msg)
@@ -262,7 +278,7 @@ class NeoFSClient:
                 
                 # Check if it's JSON
                 try:
-                    import json
+                    # json is already imported at top of file
                     parsed = json.loads(output)
                     if isinstance(parsed, dict):
                         output = parsed
@@ -350,7 +366,7 @@ class NeoFSClient:
                     # Check if it's JSON string
                     elif token_result.strip().startswith('{'):
                         try:
-                            import json
+                            # json is already imported at top of file
                             parsed = json.loads(token_result)
                             if isinstance(parsed, dict):
                                 bearer_token = parsed.get("bearer_token") or parsed.get("token") or parsed.get("value")
@@ -428,10 +444,41 @@ class NeoFSClient:
             params["attributes_json"] = json.dumps(attributes)
             print(f"   Attributes JSON: {params['attributes_json'][:100]}...")
         
+        # Check NeoFS balance before attempting container creation
+        print(f"💰 [NEOFS] Checking NeoFS balance before container creation...")
+        try:
+            balance_result = await self.get_balance()
+            print(f"💰 [NEOFS] Current balance: {balance_result}")
+            # Extract balance value if it's a dict
+            if isinstance(balance_result, dict):
+                balance_value = balance_result.get("balance") or balance_result.get("value") or balance_result.get("amount")
+                if balance_value is not None:
+                    print(f"💰 [NEOFS] Balance: {balance_value}")
+                    # NeoFS container creation typically requires some balance (exact amount depends on network)
+                    if isinstance(balance_value, (int, float)) and balance_value <= 0:
+                        print(f"⚠️  [NEOFS] Warning: NeoFS balance is {balance_value}. Container creation may fail.")
+        except Exception as balance_error:
+            print(f"⚠️  [NEOFS] Could not check balance: {balance_error}")
+            print(f"   Continuing with container creation attempt...")
+        
         print(f"📦 [NEOFS] Calling create_container_tool.execute()...")
         try:
             result = await self.create_container_tool.execute(**params)
             output = result.output if hasattr(result, 'output') else result
+            
+            # Check if the output contains an error message
+            output_str = str(output)
+            if "❌" in output_str or "Failed" in output_str or "error" in output_str.lower():
+                # Extract error message from formatted output
+                if "insufficient balance" in output_str.lower() or "balance" in output_str.lower():
+                    error_msg = "insufficient balance to create container"
+                    print(f"❌ [NEOFS] Container creation failed: {error_msg}")
+                    raise ValueError(f"NeoFS balance insufficient: {error_msg}. NeoFS uses its own balance system separate from Neo GAS tokens. Visit https://fs.neo.org/ to deposit NeoFS balance.")
+                else:
+                    # Generic error
+                    print(f"❌ [NEOFS] Container creation failed: {output_str[:200]}")
+                    raise ValueError(f"Container creation failed: {output_str[:200]}")
+            
             print(f"✅ [NEOFS] Container creation tool executed successfully")
             return output
         except Exception as e:
@@ -516,31 +563,55 @@ class NeoFSClient:
         Returns:
             Dict containing object_id and other metadata
         """
+        print(f"📤 [NEOFS] upload_object: container={container_id}, has_file={bool(file_path)}, has_content={bool(content)}")
+        
         params = {
             "container_id": container_id
         }
         
         if file_path:
             params["file_path"] = file_path
+            print(f"   Using file_path: {file_path}")
         elif content:
             params["content"] = content
+            print(f"   Using content (length: {len(content)} chars)")
         else:
             raise ValueError("Either file_path or content must be provided")
         
         if attributes_json:
             params["attributes_json"] = attributes_json
+            print(f"   Attributes: {attributes_json[:100]}...")
         
         if bearer_token:
             params["bearer_token"] = bearer_token
+            print(f"   Bearer token provided (length: {len(bearer_token)})")
+        else:
+            print(f"   No bearer token (public container)")
         
-        result = await self.upload_object_tool.execute(**params)
-        output = result.output if hasattr(result, 'output') else result
-        if isinstance(output, str):
-            try:
-                output = json.loads(output)
-            except:
-                pass
-        return output
+        print(f"📤 [NEOFS] Calling upload_object_tool.execute()...")
+        try:
+            result = await self.upload_object_tool.execute(**params)
+            output = result.output if hasattr(result, 'output') else result
+            
+            if isinstance(output, str):
+                try:
+                    output = json.loads(output)
+                except:
+                    pass
+            
+            if isinstance(output, dict):
+                object_id = output.get("object_id") or output.get("id") or output.get("oid")
+                if object_id:
+                    print(f"✅ [NEOFS] Upload successful! Object ID: {object_id}")
+                else:
+                    print(f"⚠️ [NEOFS] No object_id in result: {list(output.keys())}")
+            
+            return output
+        except Exception as e:
+            print(f"❌ [NEOFS] Upload failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def download_object_by_id(
         self,
@@ -630,24 +701,59 @@ class NeoFSClient:
         Returns:
             List of matching objects
         """
+        print(f"🔍 [NEOFS] search_objects called: container={container_id}, filters={filters}")
+        
         params = {
             "container_id": container_id
         }
         
         if filters:
             params["filters"] = filters
+            print(f"   Filters: {filters}")
+        else:
+            print(f"   No filters (searching all objects)")
         
         if bearer_token:
             params["bearer_token"] = bearer_token
+            print(f"   Bearer token provided")
+        else:
+            print(f"   No bearer token (public container)")
         
-        result = await self.search_objects_tool.execute(**params)
-        output = result.output if hasattr(result, 'output') else result
-        if isinstance(output, str):
-            try:
-                output = json.loads(output)
-            except:
-                pass
-        return output if isinstance(output, list) else []
+        print(f"🔍 [NEOFS] Calling search_objects_tool.execute() with params: {list(params.keys())}")
+        try:
+            result = await self.search_objects_tool.execute(**params)
+            output = result.output if hasattr(result, 'output') else result
+            
+            print(f"🔍 [NEOFS] Tool result type: {type(output)}")
+            if isinstance(output, str):
+                print(f"🔍 [NEOFS] Tool returned string (first 500 chars): {output[:500]}")
+                try:
+                    output = json.loads(output)
+                    print(f"🔍 [NEOFS] Parsed as JSON: {type(output)}")
+                except Exception as e:
+                    print(f"🔍 [NEOFS] Could not parse as JSON: {e}")
+                    pass
+            
+            if isinstance(output, list):
+                print(f"✅ [NEOFS] Search returned {len(output)} objects")
+                if len(output) > 0:
+                    print(f"   First object: {output[0]}")
+            elif isinstance(output, dict):
+                print(f"⚠️ [NEOFS] Search returned dict instead of list: {list(output.keys())}")
+                # Try to extract objects from dict
+                if "objects" in output:
+                    output = output["objects"]
+                elif "results" in output:
+                    output = output["results"]
+                elif "items" in output:
+                    output = output["items"]
+            
+            return output if isinstance(output, list) else []
+        except Exception as e:
+            print(f"❌ [NEOFS] search_objects_tool.execute() failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     async def delete_object(
         self,
@@ -767,17 +873,26 @@ class NeoFSClient:
             "FileName": f"market_{market_id}.json"
         }
         
-        # Convert market data to JSON and base64 encode
+        # Convert market data to JSON string (not base64 - the tool will handle encoding)
         json_content = json.dumps(market_data, indent=2)
-        import base64
-        content_base64 = base64.b64encode(json_content.encode('utf-8')).decode('utf-8')
+        print(f"📦 [NEOFS] Uploading market {market_id} to container {container_id}")
+        print(f"   Content length: {len(json_content)} bytes")
+        print(f"   Attributes: {attributes}")
         
-        return await self.upload_object(
-            container_id=container_id,
-            content=content_base64,
-            attributes_json=json.dumps(attributes),
-            bearer_token=bearer_token
-        )
+        try:
+            result = await self.upload_object(
+                container_id=container_id,
+                content=json_content,  # Pass JSON string directly, not base64
+                attributes_json=json.dumps(attributes),
+                bearer_token=bearer_token
+            )
+            print(f"✅ [NEOFS] Market {market_id} uploaded successfully: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ [NEOFS] Upload failed for market {market_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def get_market_data(
         self,
@@ -849,7 +964,19 @@ class NeoFSClient:
             List of market data dictionaries
         """
         try:
-            # Search for all objects with type="market_data"
+            print(f"🔍 [NEOFS] list_all_markets: Searching for markets in container {container_id}")
+            
+            # First, try searching without filters to see if we can find any objects
+            print(f"🔍 [NEOFS] Step 1: Searching all objects (no filters)...")
+            all_objects = await self.search_objects(
+                container_id=container_id,
+                filters=None,
+                bearer_token=bearer_token
+            )
+            print(f"🔍 [NEOFS] Found {len(all_objects)} total objects in container")
+            
+            # Now search for objects with type="market_data"
+            print(f"🔍 [NEOFS] Step 2: Searching for objects with type='market_data'...")
             filters = [{"key": "type", "value": "market_data"}]
             objects = await self.search_objects(
                 container_id=container_id,
@@ -857,15 +984,48 @@ class NeoFSClient:
                 bearer_token=bearer_token
             )
             
-            if not objects:
+            print(f"🔍 [NEOFS] Search returned {len(objects) if isinstance(objects, list) else 0} objects")
+            print(f"🔍 [NEOFS] Objects type: {type(objects)}")
+            if isinstance(objects, list) and len(objects) > 0:
+                print(f"🔍 [NEOFS] First object sample: {objects[0]}")
+            
+            # If no results with type filter, try searching by FileName pattern
+            if not objects or not isinstance(objects, list) or len(objects) == 0:
+                print(f"⚠️ [NEOFS] No objects found with type='market_data', trying FileName pattern...")
+                filters = [{"key": "FileName", "value": "market_"}]
+                objects = await self.search_objects(
+                    container_id=container_id,
+                    filters=filters,
+                    bearer_token=bearer_token
+                )
+                print(f"🔍 [NEOFS] FileName search returned {len(objects) if isinstance(objects, list) else 0} objects")
+            
+            if not objects or not isinstance(objects, list) or len(objects) == 0:
+                print(f"⚠️ [NEOFS] No market objects found. Total objects in container: {len(all_objects)}")
+                if len(all_objects) > 0:
+                    print(f"   Sample object attributes: {all_objects[0] if isinstance(all_objects[0], dict) else 'N/A'}")
                 return []
             
             markets = []
-            for obj_info in objects:
-                object_id = obj_info.get("object_id") or obj_info.get("id")
+            for idx, obj_info in enumerate(objects):
+                print(f"🔍 [NEOFS] Processing object {idx + 1}/{len(objects)}: {type(obj_info)}")
+                
+                # Extract object_id - could be in different formats
+                object_id = None
+                if isinstance(obj_info, dict):
+                    object_id = obj_info.get("object_id") or obj_info.get("id") or obj_info.get("oid")
+                elif isinstance(obj_info, str):
+                    # Try to extract from string
+                    import re
+                    oid_match = re.search(r'([A-Za-z0-9]{40,})', obj_info)
+                    if oid_match:
+                        object_id = oid_match.group(1)
+                
                 if not object_id:
+                    print(f"⚠️ [NEOFS] Could not extract object_id from: {obj_info}")
                     continue
                 
+                print(f"📥 [NEOFS] Downloading object {object_id}...")
                 try:
                     # Download the object
                     result_bytes = await self.download_object_by_id(
@@ -882,13 +1042,19 @@ class NeoFSClient:
                     
                     market_data = json.loads(json_str)
                     markets.append(market_data)
+                    print(f"✅ [NEOFS] Loaded market {market_data.get('market_id', 'unknown')}")
                 except Exception as e:
-                    print(f"Error parsing market data for object {object_id}: {e}")
+                    print(f"❌ [NEOFS] Error parsing market data for object {object_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
+            print(f"✅ [NEOFS] Successfully loaded {len(markets)} markets")
             return markets
         except Exception as e:
-            print(f"Error listing markets from NeoFS: {e}")
+            print(f"❌ [NEOFS] Error listing markets: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     async def upload_agent_analysis(

@@ -7,6 +7,7 @@ import { MarketCard } from "@/components/features/MarketCard";
 import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { fetchAllMarketsFromContract } from "@/lib/neoline";
+import { fetchMarkets } from "@/lib/api";
 
 export default function MarketsPage() {
   const router = useRouter();
@@ -35,26 +36,54 @@ export default function MarketsPage() {
       setError(null);
 
       try {
-        // Fetch directly from contract using NeoLine (no backend needed)
-        console.log("🔍 [MARKETS PAGE] Fetching markets from contract...");
-        const fetchedMarkets = await fetchAllMarketsFromContract();
-        console.log("✅ [MARKETS PAGE] Fetched markets:", fetchedMarkets);
+        // Try backend API first (fetches from NeoFS + enriches with contract data)
+        // Fallback to direct contract fetch if backend fails
+        console.log(
+          "🔍 [MARKETS PAGE] Fetching markets from backend API (NeoFS + contract)..."
+        );
+        let fetchedMarkets;
+
+        try {
+          // fetchMarkets returns Market[] directly, not a response object
+          fetchedMarkets = await fetchMarkets();
+          console.log(
+            "✅ [MARKETS PAGE] Fetched from backend API (NeoFS + contract):",
+            fetchedMarkets
+          );
+        } catch (apiError) {
+          console.warn(
+            "⚠️ [MARKETS PAGE] Backend API failed, falling back to direct contract fetch:",
+            apiError
+          );
+          // Fallback to direct contract fetch
+          fetchedMarkets = await fetchAllMarketsFromContract();
+          console.log(
+            "✅ [MARKETS PAGE] Fetched from contract (fallback):",
+            fetchedMarkets
+          );
+        }
 
         if (fetchedMarkets && fetchedMarkets.length > 0) {
-          // Ensure all markets have required fields for MarketCard
-          const normalizedMarkets = fetchedMarkets.map((m) => {
+          // The API already normalizes the data, but we need to format it for MarketCard
+          const normalizedMarkets = fetchedMarkets.map((m: any) => {
             // Format resolve date
             let resolveDateStr = "";
-            if (m.resolveDate) {
+            if (m.resolveDate || m.resolve_date) {
+              const dateValue = m.resolveDate || m.resolve_date;
               // If it's a timestamp (number or string), convert to date
               const timestamp =
-                typeof m.resolveDate === "number"
-                  ? m.resolveDate
-                  : parseInt(m.resolveDate, 10);
+                typeof dateValue === "number"
+                  ? dateValue
+                  : parseInt(dateValue, 10);
               if (!isNaN(timestamp) && timestamp > 0) {
-                resolveDateStr = new Date(timestamp).toLocaleDateString();
+                // Handle both seconds and milliseconds timestamps
+                const date =
+                  timestamp > 1000000000000
+                    ? new Date(timestamp)
+                    : new Date(timestamp * 1000);
+                resolveDateStr = date.toLocaleDateString();
               } else {
-                resolveDateStr = String(m.resolveDate);
+                resolveDateStr = String(dateValue);
               }
             } else {
               resolveDateStr = new Date().toLocaleDateString();
@@ -71,7 +100,7 @@ export default function MarketsPage() {
               probability:
                 typeof m.probability === "number" ? m.probability : 50,
               volume: m.volume || "0",
-              isResolved: m.isResolved || false,
+              isResolved: m.isResolved || m.is_resolved || false,
               outcome: outcome,
             };
             return marketCard;

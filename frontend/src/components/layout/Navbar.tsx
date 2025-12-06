@@ -11,9 +11,9 @@ export function Navbar() {
       <div className="flex items-center gap-12">
         <Link href="/" className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center font-bold text-black text-xl">
-            X
+            N
           </div>
-          <span className="text-xl font-bold tracking-tight">PredictX</span>
+          <span className="text-xl font-bold tracking-tight">Noro</span>
         </Link>
       </div>
 

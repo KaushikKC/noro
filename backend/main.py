@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ from neo_contract_client import NeoContractClient
 from neo_oracle_client import NeoOracleClient, OracleWebhookHandler
 from neofs_client import NeoFSClient
 from agent_service import AgentService
+from database import insert_market, get_market as get_market_from_db, list_markets as list_markets_from_db, update_market_onchain_data
 
 # Load environment variables
 load_dotenv()
@@ -43,8 +44,24 @@ NEO_RPC_URL = os.getenv("NEO_RPC_URL", _default_rpc_url)
 # Use same contract hash as frontend
 # Frontend uses: 0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a
 NEO_CONTRACT_HASH = os.getenv("NEO_CONTRACT_HASH", "0x76834b08fe30a94c0d7c722454b9a2e7b1d61e3a")
+# NeoFS endpoint - should NOT include /v1 (client adds it)
 NEOFS_ENDPOINT = os.getenv("NEOFS_ENDPOINT", "https://rest.fs.neo.org")
+# Remove /v1 suffix if present (the client adds it automatically)
+if NEOFS_ENDPOINT.endswith('/v1'):
+    NEOFS_ENDPOINT = NEOFS_ENDPOINT[:-3]
+
+# Public NeoFS container ID (provided by Neo team)
+# This is a public container that doesn't require balance to use
+NEOFS_PUBLIC_CONTAINER_ID = os.getenv("NEOFS_PUBLIC_CONTAINER_ID", "CeeroywT8ppGE4HGjhpzocJkdb2yu3wD5qCGFTjkw1Cc")
 NEO_NETWORK_FS = os.getenv("NEO_NETWORK", "testnet")  # For NeoFS
+# NeoFS requires owner_address and private_key_wif for operations
+# These match the environment variable names expected by NeoFSClient in spoon-ai-sdk:
+# NEOFS_BASE_URL, NEOFS_OWNER_ADDRESS, NEOFS_PRIVATE_KEY_WIF
+NEOFS_OWNER_ADDRESS = os.getenv("NEOFS_OWNER_ADDRESS", "")
+NEOFS_PRIVATE_KEY_WIF = os.getenv("NEOFS_PRIVATE_KEY_WIF", "")
+# Set NEOFS_BASE_URL (required by NeoFSClient, alias for NEOFS_ENDPOINT)
+if not os.getenv("NEOFS_BASE_URL"):
+    os.environ["NEOFS_BASE_URL"] = NEOFS_ENDPOINT
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 # Initialize services (lazy initialization for async clients)
@@ -54,11 +71,31 @@ contract_client = None
 oracle_client = None
 oracle_handler = None
 
-# Initialize NeoFS client (may fail if spoon-ai-sdk not installed)
+# Initialize NeoFS client (may fail if spoon-ai-sdk not installed or other errors)
+neofs_client = None
 try:
+    print(f"🔧 Initializing NeoFS client...")
+    print(f"   Gateway: {NEOFS_ENDPOINT}")
+    print(f"   Network: {NEO_NETWORK_FS}")
+    print(f"   Owner Address: {NEOFS_OWNER_ADDRESS[:10] + '...' if NEOFS_OWNER_ADDRESS else 'NOT SET'}")
+    print(f"   Private Key: {'SET' if NEOFS_PRIVATE_KEY_WIF else 'NOT SET'}")
+    
+    if not NEOFS_OWNER_ADDRESS or not NEOFS_PRIVATE_KEY_WIF:
+        print(f"⚠️  Warning: NeoFS owner_address or private_key_wif not set in .env")
+        print(f"   NeoFS operations will fail. Set NEOFS_OWNER_ADDRESS and NEOFS_PRIVATE_KEY_WIF in backend/.env")
+        print(f"   For now, NeoFS client will be initialized but operations may fail.")
+    
     neofs_client = NeoFSClient(gateway_url=NEOFS_ENDPOINT, network=NEO_NETWORK_FS)
+    print(f"✅ NeoFS client initialized successfully")
 except ImportError as e:
-    print(f"Warning: NeoFS client not available: {e}")
+    print(f"⚠️  Warning: NeoFS client not available (ImportError): {e}")
+    print(f"   Install spoon-ai-sdk: pip install spoon-ai-sdk")
+    neofs_client = None
+except Exception as e:
+    print(f"⚠️  Warning: NeoFS client initialization failed: {e}")
+    print(f"   Error type: {type(e).__name__}")
+    import traceback
+    traceback.print_exc()
     neofs_client = None
 
 agent_service = AgentService()
@@ -135,7 +172,7 @@ async def autonomous_agent_scheduler():
                     if neofs_client:
                         try:
                             await neofs_client.upload_agent_analysis(
-                                container_id="noro-markets",
+                                container_id=NEOFS_PUBLIC_CONTAINER_ID,
                                 market_id=market_id,
                                 analysis=result
                             )
@@ -155,67 +192,36 @@ async def autonomous_agent_scheduler():
             await asyncio.sleep(60)  # Wait 1 minute before retry
 
 
-# Lifespan context
-@asynccontextmanager
-async def ensure_neofs_container():
+# Helper function to get NeoFS public container ID
+async def get_neofs_container_id():
     """
-    Ensure NeoFS container exists for storing market data
-    Creates a PUBLIC container if it doesn't exist
+    Get the NeoFS public container ID for storing market data
+    Uses the public container provided by Neo team (no balance required)
     """
     if not neofs_client:
-        print("⚠️  NeoFS client not available, skipping container setup")
-        return None
+        print("⚠️  NeoFS client not available, using public container ID from config")
+        return NEOFS_PUBLIC_CONTAINER_ID
     
+    # Use the public container ID provided by Neo team
+    # This is a public container that doesn't require balance to use
+    container_id = NEOFS_PUBLIC_CONTAINER_ID
+    print(f"📦 Using NeoFS public container: {container_id}")
+    print(f"   This is a public container provided by Neo team")
+    print(f"   No balance required - you can read/write to this container")
+    
+    # Optionally verify the container exists and is accessible
     try:
-        container_name = "noro-markets"
-        print(f"📦 Checking NeoFS container '{container_name}'...")
-        
-        # List existing containers
-        containers = await neofs_client.list_containers()
-        
-        # Check if container exists
-        container_id = None
-        for container in containers:
-            if isinstance(container, dict):
-                if container.get("name") == container_name or container.get("container_id") == container_name:
-                    container_id = container.get("container_id") or container.get("id")
-                    break
-            elif isinstance(container, str):
-                # If container is just an ID string
-                container_id = container
-                break
-        
-        if container_id:
-            print(f"✅ NeoFS container '{container_name}' already exists: {container_id}")
-            return container_id
-        
-        # Create container if it doesn't exist
-        print(f"📦 Creating NeoFS container '{container_name}'...")
-        result = await neofs_client.create_container(
-            name=container_name,
-            basic_acl="public-read-write",  # PUBLIC container - no bearer token needed for reads
-            placement_policy="REP 1",
-            attributes={"type": "market_storage", "created_by": "noro_backend"}
-        )
-        
-        if isinstance(result, dict):
-            container_id = result.get("container_id") or result.get("id")
-        elif isinstance(result, str):
-            container_id = result
-        
-        if container_id:
-            print(f"✅ Created NeoFS container '{container_name}': {container_id}")
-            return container_id
-        else:
-            print(f"⚠️  Container creation returned unexpected result: {result}")
-            return None
-            
+        container_info = await neofs_client.get_container_info(container_id)
+        print(f"✅ Verified public container is accessible")
+        if isinstance(container_info, dict):
+            print(f"   Container info: {container_info}")
     except Exception as e:
-        print(f"❌ Error ensuring NeoFS container: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        print(f"⚠️  Could not verify container info (but will still try to use it): {e}")
+        # Continue anyway - the container might still be accessible
+    
+    return container_id
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     global contract_client, oracle_client, oracle_handler
@@ -240,7 +246,7 @@ async def lifespan(app: FastAPI):
         print("   Continuing with basic RPC client only...")
     
     # Ensure NeoFS container exists
-    neofs_container_id = await ensure_neofs_container()
+    neofs_container_id = await get_neofs_container_id()
     if neofs_container_id:
         # Store container ID globally for use in endpoints
         import os
@@ -303,6 +309,11 @@ class TradeProposal(BaseModel):
     action: str  # "BUY_YES" or "BUY_NO"
     amount: float
     confidence: float
+
+class AnalyzeTestRequest(BaseModel):
+    question: str
+    oracle_url: Optional[str] = ""
+    market_id: Optional[str] = "test"
 
 class MarketResponse(BaseModel):
     id: str
@@ -416,7 +427,7 @@ async def store_market_data_in_neofs_after_tx(market_data: dict, tx_data: dict):
     try:
         # Get container ID from environment or use default
         import os
-        container_id = os.getenv("NEOFS_CONTAINER_ID", "noro-markets")
+        container_id = os.getenv("NEOFS_CONTAINER_ID", NEOFS_PUBLIC_CONTAINER_ID)
         
         # Wait for transaction to be confirmed (poll for market count increase)
         print(f"⏳ Waiting for transaction confirmation to get market_id...")
@@ -507,7 +518,7 @@ async def store_market_data_in_neofs(market_data: dict, tx_hash: Optional[str] =
     try:
         # Get container ID from environment or use default
         import os
-        container_id = os.getenv("NEOFS_CONTAINER_ID", "noro-markets")
+        container_id = os.getenv("NEOFS_CONTAINER_ID", NEOFS_PUBLIC_CONTAINER_ID)
         
         # If market_id not provided, try to get it from contract after some delay
         if not market_id and tx_hash:
@@ -546,232 +557,346 @@ async def store_market_data_in_neofs(market_data: dict, tx_hash: Optional[str] =
         print(f"❌ Error storing market data in NeoFS: {e}")
 
 @app.get("/markets")
-async def list_markets(use_neofs: bool = True):
+async def list_markets():
     """
-    List all markets
-    Fetches from NeoFS first (for human-readable data), then enriches with contract data
-    
-    Args:
-        use_neofs: If True, try to fetch from NeoFS first (default: True)
+    List all markets from database (fast retrieval)
+    Enriches with contract data (shares, probabilities, etc.)
     """
     try:
-        print(f"🔍 [LIST MARKETS] Request received, use_neofs={use_neofs}")
+        # Fetch from database (fast)
+        print(f"💾 [LIST] Fetching markets from database...")
+        markets = list_markets_from_db(status="active", limit=100)
+        print(f"💾 [LIST] Found {len(markets)} markets in database")
         
-        # Get container ID from environment or use default
-        import os
-        container_id = os.getenv("NEOFS_CONTAINER_ID", "noro-markets")
-        
-        # Try NeoFS first if requested and available
-        neofs_markets = []
-        if use_neofs and neofs_client:
+        # Enrich with contract data if available
+        if contract_client and markets:
             try:
-                print(f"📦 [LIST MARKETS] Fetching from NeoFS first (container: {container_id})...")
-                neofs_markets = await neofs_client.list_all_markets(
-                    container_id=container_id
-                )
-                print(f"✅ [LIST MARKETS] Found {len(neofs_markets)} markets in NeoFS")
-            except Exception as e:
-                print(f"⚠️ [LIST MARKETS] Error fetching from NeoFS: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        if not contract_client:
-            print(f"⚠️ [LIST MARKETS] Contract client not initialized")
-            # Return NeoFS markets if available
-            if neofs_markets:
-                return {
-                    "success": True,
-                    "markets": neofs_markets,
-                    "count": len(neofs_markets),
-                    "source": "neofs_only"
-                }
-            return {
-                "success": True,
-                "markets": [],
-                "count": 0,
-                "note": "Contract client not initialized"
-            }
-        
-        print(f"✅ [LIST MARKETS] Contract client is available")
-        
-        # Get market count from contract
-        try:
-            print(f"🔍 [LIST MARKETS] Fetching market count...")
-            market_count = await contract_client.get_market_count()
-            print(f"📊 [LIST MARKETS] Contract reports {market_count} markets")
-        except Exception as e:
-            print(f"❌ [LIST MARKETS] Error getting market count: {e}")
-            import traceback
-            traceback.print_exc()
-            market_count = 0
-        
-        if market_count == 0:
-            print(f"⚠️ [LIST MARKETS] No markets found in contract")
-            return {
-                "success": True,
-                "markets": [],
-                "count": 0,
-                "source": "contract",
-                "note": "No markets found in contract"
-            }
-        
-        print(f"🔍 [LIST MARKETS] Fetching {market_count} markets from contract...")
-        
-        # Fetch each market from contract
-        markets = []
-        for i in range(1, market_count + 1):
-            try:
-                print(f"  🔍 [LIST MARKETS] Fetching market {i}/{market_count}...")
-                market = await contract_client.get_market(str(i))
-                if market:
-                    question = market.get('question', 'N/A')
-                    print(f"  ✅ [LIST MARKETS] Market {i}: {question[:50]}...")
-                    print(f"  📊 [LIST MARKETS] Market {i} data: {json.dumps(market, indent=2, default=str)}")
+                market_count = await contract_client.get_market_count()
+                if market_count > 0:
+                    print(f"📊 [LIST] Enriching with contract data ({market_count} markets on-chain)...")
                     
-                    # Ensure market has required fields
-                    if not market.get("question"):
-                        print(f"  ⚠️ [LIST MARKETS] Market {i} missing question, skipping")
-                        continue
+                    # Create lookup for contract data by market_id
+                    contract_data_map = {}
+                    for i in range(1, market_count + 1):
+                        try:
+                            contract_market = await contract_client.get_market(str(i))
+                            if contract_market:
+                                contract_data_map[str(i)] = contract_market
+                        except:
+                            continue
                     
-                    # Try to find matching NeoFS data
-                    neofs_data = None
-                    for neofs_market in neofs_markets:
-                        if str(neofs_market.get("market_id")) == str(i):
-                            neofs_data = neofs_market
-                            break
-                    
-                    if neofs_data:
-                        print(f"  📦 [LIST MARKETS] Market {i} NeoFS data found, merging...")
-                        # Merge NeoFS data with contract data (NeoFS provides human-readable, contract provides on-chain state)
-                        market.update({
-                            "description": neofs_data.get("description", market.get("description")),
-                            "category": neofs_data.get("category", market.get("category")),
-                            "oracle_url": neofs_data.get("oracle_url", market.get("oracle_url")),
-                        })
-                        # Keep contract data for on-chain fields (shares, resolved, etc.)
-                    else:
-                        print(f"  ⚠️ [LIST MARKETS] Market {i} not found in NeoFS (using contract data only)")
-                    
-                    markets.append(market)
-                else:
-                    print(f"  ⚠️ [LIST MARKETS] Market {i} returned None")
-            except Exception as e:
-                print(f"  ❌ [LIST MARKETS] Error fetching market {i}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-        
-        print(f"✅ [LIST MARKETS] Successfully fetched {len(markets)} markets from contract")
-        print(f"📊 [LIST MARKETS] Returning markets: {json.dumps([m.get('question', 'N/A') for m in markets], indent=2)}")
+                    # Update markets with contract data
+                    for market in markets:
+                        market_id = str(market.get("market_id") or market.get("id") or "")
+                        if market_id in contract_data_map:
+                            contract_market = contract_data_map[market_id]
+                            # Update database with latest contract data
+                            update_market_onchain_data(market_id, {
+                                "yes_shares": contract_market.get("yes_shares", 0),
+                                "no_shares": contract_market.get("no_shares", 0),
+                                "is_resolved": contract_market.get("resolved", False),
+                                "outcome": contract_market.get("outcome"),
+                                "probability": contract_market.get("probability", 50),
+                            })
+                            # Also update in-memory data for response
+                            market.update({
+                                "yes_shares": contract_market.get("yes_shares", 0),
+                                "no_shares": contract_market.get("no_shares", 0),
+                                "is_resolved": contract_market.get("resolved", False),
+                                "outcome": contract_market.get("outcome"),
+                                "probability": contract_market.get("probability", 50),
+                            })
+                except Exception as e:
+                    print(f"⚠️ [LIST] Contract enrichment error: {e}")
         
         return {
             "success": True,
             "markets": markets,
             "count": len(markets),
-            "source": "contract" if not use_neofs else "contract+neofs"
+            "source": "database" + ("+contract" if contract_client else "")
         }
     except Exception as e:
-        print(f"❌ Error in list_markets: {e}")
+        print(f"❌ [LIST] Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/markets/{market_id}")
-async def get_market(market_id: str, use_neofs: bool = True):
+@app.post("/markets/{market_id}/neofs/store")
+async def store_market_in_neofs(market_id: str, request: Request):
     """
-    Get market details by ID
-    Fetches from NeoFS first (for human-readable data), then enriches with contract data
+    Manually trigger storage of a market in NeoFS
+    """
+    print(f"📥 [STORE] POST /markets/{market_id}/neofs/store")
+    try:
+        if not neofs_client:
+            print(f"❌ [STORE] NeoFS client not available")
+            return {"success": False, "reason": "NeoFS client not available"}
+        
+        import os
+        container_id = os.getenv("NEOFS_CONTAINER_ID", NEOFS_PUBLIC_CONTAINER_ID)
+        
+        # Get market_data from request body (human-readable data from frontend)
+        try:
+            body = await request.json()
+            market_data = body if body else None
+            print(f"📥 [STORE] Received data: question='{market_data.get('question', 'N/A')[:40] if market_data else 'None'}...'")
+        except Exception as e:
+            print(f"❌ [STORE] Error parsing request: {e}")
+            market_data = None
+        
+        # Market data MUST be provided from frontend (human-readable)
+        if not market_data:
+            print(f"❌ [STORE] No market data provided")
+            return {
+                "success": False,
+                "reason": "Market data must be provided. Contract data is encoded and not human-readable."
+            }
+        
+        # Validate required fields
+        if not market_data.get("question"):
+            print(f"❌ [STORE] Missing question field")
+            return {"success": False, "reason": "Question is required"}
+        
+        # Add metadata
+        from datetime import datetime
+        market_data["market_id"] = market_id
+        market_data["status"] = "confirmed"
+        market_data["created_at"] = datetime.now().isoformat()
+        market_data["created_timestamp"] = int(datetime.now().timestamp())
+        market_data["source"] = "frontend_creation"
+        
+        # Convert resolveDate to resolve_date and resolve_timestamp if needed
+        if "resolveDate" in market_data and "resolve_date" not in market_data:
+            resolve_date_str = market_data.pop("resolveDate")
+            # If it's a timestamp string, convert to both formats
+            try:
+                resolve_timestamp = int(resolve_date_str)
+                market_data["resolve_timestamp"] = resolve_timestamp
+                # Convert timestamp to ISO date string
+                market_data["resolve_date"] = datetime.fromtimestamp(resolve_timestamp / 1000).isoformat()
+            except:
+                market_data["resolve_date"] = resolve_date_str
+        
+        # Handle oracleUrl -> oracle_url
+        if "oracleUrl" in market_data and "oracle_url" not in market_data:
+            market_data["oracle_url"] = market_data.pop("oracleUrl")
+        
+        print(f"📦 [STORE] Market {market_id} -> NeoFS container {container_id}")
+        print(f"   Question: {market_data.get('question', 'N/A')[:50]}...")
+        
+        result = await neofs_client.upload_market_data(
+            container_id=container_id,
+            market_id=market_id,
+            market_data=market_data
+        )
+        
+        # Extract object_id from result (could be dict or string)
+        object_id = None
+        if isinstance(result, dict):
+            object_id = result.get("object_id") or result.get("id") or result.get("oid")
+        elif isinstance(result, str):
+            # Try to extract object ID from formatted string
+            import re
+            oid_match = re.search(r'Object ID: ([A-Za-z0-9]+)', result)
+            if oid_match:
+                object_id = oid_match.group(1)
+            else:
+                object_id = result[:50]  # Fallback to first 50 chars
+        
+        print(f"✅ [STORE] Market {market_id} stored in NeoFS! Object ID: {object_id}")
+        
+        # Generate NeoFS download URL
+        neofs_base_url = os.getenv("NEOFS_ENDPOINT", "https://rest.fs.neo.org")
+        neofs_url = f"{neofs_base_url}/v1/objects/{container_id}/by_id/{object_id}" if object_id else None
+        
+        # Store in database for fast retrieval
+        market_data["neofs_object_id"] = object_id
+        market_data["neofs_container_id"] = container_id
+        market_data["neofs_url"] = neofs_url
+        
+        print(f"💾 [STORE] Storing market {market_id} in database...")
+        db_success = insert_market(market_data)
+        if db_success:
+            print(f"✅ [STORE] Market {market_id} stored in database!")
+        else:
+            print(f"⚠️ [STORE] Failed to store market {market_id} in database")
+        
+        return {
+            "success": True,
+            "market_id": market_id,
+            "container_id": container_id,
+            "object_id": object_id,
+            "neofs_url": neofs_url,
+            "message": f"Market {market_id} stored in NeoFS and database"
+        }
+    except Exception as e:
+        print(f"❌ [STORE] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "reason": str(e)}
+
+@app.get("/markets/{market_id}/neofs/verify")
+async def verify_market_in_neofs(market_id: str):
+    """
+    Verify if a market exists in NeoFS storage
     
     Args:
-        market_id: Market ID
-        use_neofs: If True, try to fetch from NeoFS first, then enrich with contract data
+        market_id: Market ID to check
+        
+    Returns:
+        Dict with verification status and market data if found
     """
     try:
-        market = None
-        neofs_data = None
-        source = "contract_only"
+        if not neofs_client:
+            return {
+                "success": False,
+                "in_neofs": False,
+                "reason": "NeoFS client not available"
+            }
         
         # Get container ID from environment or use default
         import os
-        container_id = os.getenv("NEOFS_CONTAINER_ID", "noro-markets")
+        container_id = os.getenv("NEOFS_CONTAINER_ID", NEOFS_PUBLIC_CONTAINER_ID)
         
-        # Try NeoFS first if requested and available (for human-readable data)
-        if use_neofs and neofs_client:
-            try:
-                print(f"📦 [GET MARKET] Fetching from NeoFS first (container: {container_id}, market_id: {market_id})...")
-                neofs_data = await neofs_client.get_market_data(
-                    container_id=container_id,
-                    market_id=market_id
-                )
-                if neofs_data:
-                    print(f"✅ [GET MARKET] Found market data in NeoFS")
-                    market = neofs_data
-                    source = "neofs"
-                else:
-                    print(f"⚠️ [GET MARKET] Market not found in NeoFS, will fetch from contract")
-            except Exception as e:
-                print(f"⚠️ [GET MARKET] Error fetching from NeoFS: {e}")
-                import traceback
-                traceback.print_exc()
+        neofs_data = await neofs_client.get_market_data(
+            container_id=container_id,
+            market_id=market_id
+        )
         
-        # Fetch from contract (either as primary source or to enrich NeoFS data)
-        if not contract_client:
-            if market:
-                return {
-                    "success": True,
-                    "market": market,
-                    "source": "neofs_only"
+        if neofs_data:
+            print(f"✅ Market {market_id} found in NeoFS")
+            return {
+                "success": True,
+                "in_neofs": True,
+                "market_id": market_id,
+                "container_id": container_id,
+                "market_data": {
+                    "question": neofs_data.get("question", "N/A"),
+                    "description": neofs_data.get("description", "N/A"),
+                    "category": neofs_data.get("category", "N/A"),
+                    "status": neofs_data.get("status", "unknown"),
+                    "created_at": neofs_data.get("created_at", "N/A"),
+                    "tx_hash": neofs_data.get("tx_hash", "N/A")
                 }
-            raise HTTPException(status_code=503, detail="Contract client not initialized")
+            }
+        else:
+            print(f"⚠️ Market {market_id} NOT in NeoFS")
+            return {
+                "success": True,
+                "in_neofs": False,
+                "market_id": market_id,
+                "container_id": container_id,
+                "reason": "Market data not found in NeoFS. It may still be processing or the transaction hasn't been confirmed yet."
+            }
+    except Exception as e:
+        print(f"❌ [VERIFY NEOFS] Error checking NeoFS: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "in_neofs": False,
+            "error": str(e)
+        }
+
+@app.get("/neofs/status")
+async def get_neofs_status():
+    """
+    Get NeoFS storage status and container information
+    """
+    try:
+        if not neofs_client:
+            return {
+                "success": False,
+                "available": False,
+                "reason": "NeoFS client not available"
+            }
         
-        print(f"📄 [GET MARKET] Fetching from contract (market_id: {market_id})...")
-        contract_market = await contract_client.get_market(market_id)
+        # Get container ID from environment or use default
+        import os
+        container_id = os.getenv("NEOFS_CONTAINER_ID", NEOFS_PUBLIC_CONTAINER_ID)
         
-        if not contract_market and not market:
-            raise HTTPException(status_code=404, detail="Market not found")
+        # List all markets in NeoFS
+        markets = await neofs_client.list_all_markets(container_id=container_id)
         
-        # Merge data: NeoFS provides human-readable data, contract provides on-chain state
-        if market and contract_market:
-            # Merge: contract data takes precedence for on-chain fields (shares, resolved, etc.)
-            # But keep NeoFS data for human-readable fields (description, etc.)
-            print(f"✅ [GET MARKET] Merging NeoFS and contract data")
-            # Update with contract data (shares, resolved status, etc.)
-            market.update({
-                "id": contract_market.get("id", market_id),
-                "yes_shares": contract_market.get("yes_shares", 0),
-                "no_shares": contract_market.get("no_shares", 0),
-                "is_resolved": contract_market.get("is_resolved", False),
-                "outcome": contract_market.get("outcome"),
-                "resolve_date": contract_market.get("resolve_date", market.get("resolve_date")),
-                "creator": contract_market.get("creator", market.get("creator")),
-                "created_at": contract_market.get("created_at", market.get("created_at")),
-            })
-            source = "neofs_and_contract"
-        elif contract_market:
-            # Only contract data available
-            print(f"⚠️ [GET MARKET] Only contract data available (NeoFS not found)")
-            market = contract_market
-            source = "contract_only"
-        # else: market from NeoFS only (already set above)
-        
-        # Get probability from contract
+        # Get container info
         try:
-            probability = await contract_client.get_probability(market_id)
-            market["probability"] = probability
+            container_info = await neofs_client.get_container_info(container_id)
         except:
-            market["probability"] = 0.5  # Default if not available
+            container_info = None
         
-        print(f"✅ [GET MARKET] Returning market data (source: {source})")
+        return {
+            "success": True,
+            "available": True,
+            "container_id": container_id,
+            "container_info": container_info,
+            "markets_count": len(markets),
+            "markets": [
+                {
+                    "market_id": m.get("market_id", "unknown"),
+                    "question": m.get("question", "N/A")[:50],
+                    "status": m.get("status", "unknown")
+                }
+                for m in markets
+            ]
+        }
+    except Exception as e:
+        print(f"❌ [NEOFS STATUS] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "available": False,
+            "error": str(e)
+        }
+
+@app.get("/markets/{market_id}")
+async def get_market(market_id: str):
+    """
+    Get a single market by ID from database (fast retrieval)
+    Enriches with contract data if available
+    Shows NeoFS URL for downloading the original data
+    """
+    try:
+        # Fetch from database (fast)
+        print(f"💾 [GET] Fetching market {market_id} from database...")
+        market = get_market_from_db(market_id)
+        
+        if not market:
+            raise HTTPException(status_code=404, detail=f"Market {market_id} not found")
+        
+        # Enrich with contract data if available
+        if contract_client:
+            try:
+                contract_market = await contract_client.get_market(market_id)
+                if contract_market:
+                    # Update database with latest contract data
+                    update_market_onchain_data(market_id, {
+                        "yes_shares": contract_market.get("yes_shares", 0),
+                        "no_shares": contract_market.get("no_shares", 0),
+                        "is_resolved": contract_market.get("resolved", False),
+                        "outcome": contract_market.get("outcome"),
+                        "probability": contract_market.get("probability", 50),
+                    })
+                    # Also update in-memory data for response
+                    market.update({
+                        "yes_shares": contract_market.get("yes_shares", 0),
+                        "no_shares": contract_market.get("no_shares", 0),
+                        "is_resolved": contract_market.get("resolved", False),
+                        "outcome": contract_market.get("outcome"),
+                        "probability": contract_market.get("probability", 50),
+                    })
+            except Exception as e:
+                print(f"⚠️ [GET] Contract enrichment error: {e}")
+        
         return {
             "success": True,
             "market": market,
-            "source": source
+            "source": "database" + ("+contract" if contract_client else "")
         }
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [GET MARKET] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ [GET] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Agent endpoints
@@ -796,12 +921,22 @@ async def analyze_market(market_id: str):
                 "note": "Contract client not available, using direct analysis"
             }
         
-        print(f"🔍 [ANALYZE MARKET] Fetching market {market_id} from contract...")
-        market = await contract_client.get_market(market_id)
+        # Get market from database first (fast)
+        print(f"🔍 [ANALYZE MARKET] Fetching market {market_id} from database...")
+        market = get_market_from_db(market_id)
+        
+        if not market and contract_client:
+            # Fallback to contract if not in database
+            print(f"⚠️ [ANALYZE MARKET] Market {market_id} not in database, trying contract...")
+            market = await contract_client.get_market(market_id)
+        
         if not market:
-            print(f"❌ [ANALYZE MARKET] Market {market_id} not found in contract")
+            print(f"❌ [ANALYZE MARKET] Market {market_id} not found")
             raise HTTPException(status_code=404, detail="Market not found")
-        print(f"✅ [ANALYZE MARKET] Market {market_id} found: {market.get('question', 'N/A')[:50]}...")
+        
+        # Get question from market (database or contract)
+        question = market.get("question") or market.get("Question") or f"Market {market_id}"
+        print(f"✅ [ANALYZE MARKET] Market {market_id} found: {question[:50]}...")
         
         # Run FULL autonomous analysis (Analyzer + Trader + Judge)
         # This uses REAL APIs - no mocks
@@ -813,7 +948,7 @@ async def analyze_market(market_id: str):
         # Store full analysis in NeoFS if available
         if neofs_client:
             try:
-                container_id = "noro-markets"
+                container_id = NEOFS_PUBLIC_CONTAINER_ID
                 await neofs_client.upload_agent_analysis(
                     container_id=container_id,
                     market_id=market_id,
@@ -841,6 +976,66 @@ async def analyze_market(market_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyze/test")
+async def analyze_market_test(request: AnalyzeTestRequest):
+    """
+    Test endpoint for agent analysis - accepts question and oracle URL directly
+    No contract market required - perfect for testing!
+    
+    Request body:
+    {
+        "question": "Will it rain in London, UK on December 25, 2024?",
+        "oracle_url": "https://www.metoffice.gov.uk/weather/forecast/gcpvj0v07",
+        "market_id": "test_1"  # Optional, for tracking
+    }
+    """
+    try:
+        question = request.question
+        oracle_url = request.oracle_url or ""
+        market_id = request.market_id or "test"
+        
+        if not question:
+            raise HTTPException(status_code=400, detail="Question is required")
+        
+        print(f"🧪 [TEST ANALYZE] Starting analysis for test market")
+        print(f"   Question: {question}")
+        print(f"   Oracle URL: {oracle_url}")
+        print(f"   Market ID: {market_id}")
+        
+        # Run FULL autonomous analysis (Analyzer + Trader → Judge)
+        # This uses REAL APIs - no mocks
+        result = await agent_service.full_analysis(
+            market_question=question,
+            market_id=market_id
+        )
+        
+        print(f"✅ [TEST ANALYZE] Analysis complete!")
+        print(f"   Consensus Probability: {result.get('summary', {}).get('consensus_probability', 0) * 100:.1f}%")
+        print(f"   Confidence: {result.get('summary', {}).get('consensus_confidence', 0) * 100:.0f}%")
+        
+        return {
+            "success": True,
+            "analysis": result,
+            "test_data": {
+                "question": question,
+                "oracle_url": oracle_url,
+                "market_id": market_id
+            },
+            "agents": {
+                "analyzer": "✅ Used real APIs (PubMed, arXiv, Climate, Crypto)",
+                "trader": "✅ Calculated optimal trade",
+                "judge": "✅ Aggregated consensus from multiple analyses"
+            },
+            "note": "Test analysis - all data from real APIs"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [TEST ANALYZE] Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/markets/{market_id}/trade/propose")
@@ -1014,6 +1209,25 @@ async def create_neofs_container(name: str):
         return {
             "success": True,
             "container": container
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/neofs/balance")
+async def get_neofs_balance():
+    """
+    Get NeoFS account balance
+    Note: NeoFS balance is separate from Neo GAS tokens
+    """
+    if not neofs_client:
+        raise HTTPException(status_code=503, detail="NeoFS client not configured")
+    
+    try:
+        balance = await neofs_client.get_balance()
+        return {
+            "success": True,
+            "balance": balance,
+            "note": "NeoFS balance is separate from Neo GAS tokens. You need NeoFS balance to create containers."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
